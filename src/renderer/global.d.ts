@@ -9,6 +9,15 @@ import type {
   FilePreviewResult,
   FileTreeResult,
   HermesCronJob,
+  HermesKanbanActionResult,
+  HermesKanbanAssignee,
+  HermesKanbanBoard,
+  HermesKanbanCreateBoardInput,
+  HermesKanbanCreateTaskInput,
+  HermesKanbanDiagnostic,
+  HermesKanbanTask,
+  HermesKanbanTaskActionInput,
+  HermesKanbanTaskListOptions,
   HermesConnectorConfig,
   HermesConnectorListResult,
   HermesConnectorPlatformId,
@@ -187,6 +196,20 @@ declare global {
       pauseCronJob(id: string): Promise<{ ok: boolean; message: string; exitCode: number | null }>;
       resumeCronJob(id: string): Promise<{ ok: boolean; message: string; exitCode: number | null }>;
       deleteCronJob(id: string): Promise<{ ok: boolean; message: string; exitCode: number | null }>;
+      listKanbanBoards(): Promise<HermesKanbanBoard[]>;
+      createKanbanBoard(input: HermesKanbanCreateBoardInput): Promise<HermesKanbanActionResult>;
+      switchKanbanBoard(slug: string): Promise<HermesKanbanActionResult>;
+      deleteKanbanBoard(slug: string): Promise<HermesKanbanActionResult>;
+      renameKanbanBoard(input: { slug: string; name: string }): Promise<HermesKanbanActionResult>;
+      dispatchKanban(board?: string): Promise<HermesKanbanActionResult>;
+      listKanbanTasks(options?: HermesKanbanTaskListOptions): Promise<HermesKanbanTask[]>;
+      createKanbanTask(input: HermesKanbanCreateTaskInput): Promise<HermesKanbanTask>;
+      getKanbanTask(input: { board?: string; taskId: string }): Promise<HermesKanbanTask>;
+      runKanbanTaskAction(input: HermesKanbanTaskActionInput): Promise<HermesKanbanActionResult>;
+      listKanbanDiagnostics(input?: { board?: string; taskId?: string; severity?: string }): Promise<HermesKanbanDiagnostic[]>;
+      listKanbanAssignees(board?: string): Promise<HermesKanbanAssignee[]>;
+      readKanbanTaskLog(input: { board?: string; taskId: string; tail?: number }): Promise<HermesKanbanActionResult>;
+      commentKanbanTask(input: { board?: string; taskId: string; text: string; author?: string }): Promise<HermesKanbanActionResult>;
       previewFile(filePath: string): Promise<FilePreviewResult>;
       getFileBreadcrumb(filePath: string): Promise<FileBreadcrumbItem[]>;
       getGitInfo(workspacePath: string): Promise<{ available: boolean; branch: string; dirtyCount: number; dirtyFiles?: string[] }>;

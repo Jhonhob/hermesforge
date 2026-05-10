@@ -109,6 +109,7 @@ export function NativeButton(props: {
   className?: string;
   onClick?: () => void;
   type?: "button" | "submit";
+  disabled?: boolean;
 }) {
   const variants = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm hover:shadow-md",
@@ -126,10 +127,12 @@ export function NativeButton(props: {
         "active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-indigo-200",
         variants[props.variant ?? "primary"],
         sizes[props.size ?? "md"],
+        props.disabled && "opacity-50 cursor-not-allowed pointer-events-none",
         props.className
       )}
       onClick={props.onClick}
       type={props.type ?? "button"}
+      disabled={props.disabled}
     >
       {props.children}
     </button>

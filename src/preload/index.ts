@@ -41,6 +41,15 @@ import type {
   HermesSkill,
   HermesMemoryFile,
   HermesCronJob,
+  HermesKanbanActionResult,
+  HermesKanbanAssignee,
+  HermesKanbanBoard,
+  HermesKanbanCreateBoardInput,
+  HermesKanbanCreateTaskInput,
+  HermesKanbanDiagnostic,
+  HermesKanbanTask,
+  HermesKanbanTaskActionInput,
+  HermesKanbanTaskListOptions,
   HermesConnectorConfig,
   HermesConnectorListResult,
   HermesConnectorPlatformId,
@@ -129,6 +138,20 @@ const IpcChannels = {
   pauseCronJob: "webui:crons:pause",
   resumeCronJob: "webui:crons:resume",
   deleteCronJob: "webui:crons:delete",
+  listKanbanBoards: "webui:kanban:boards:list",
+  createKanbanBoard: "webui:kanban:boards:create",
+  switchKanbanBoard: "webui:kanban:boards:switch",
+  deleteKanbanBoard: "webui:kanban:boards:delete",
+  renameKanbanBoard: "webui:kanban:boards:rename",
+  dispatchKanban: "webui:kanban:dispatch",
+  listKanbanTasks: "webui:kanban:tasks:list",
+  createKanbanTask: "webui:kanban:tasks:create",
+  getKanbanTask: "webui:kanban:tasks:get",
+  runKanbanTaskAction: "webui:kanban:tasks:action",
+  listKanbanDiagnostics: "webui:kanban:diagnostics:list",
+  listKanbanAssignees: "webui:kanban:assignees:list",
+  readKanbanTaskLog: "webui:kanban:tasks:log",
+  commentKanbanTask: "webui:kanban:tasks:comment",
   previewFile: "webui:file:preview",
   getFileBreadcrumb: "webui:file:breadcrumb",
   getGitInfo: "webui:git:info",
@@ -313,6 +336,29 @@ const api = {
   pauseCronJob: (id: string) => ipcRenderer.invoke(IpcChannels.pauseCronJob, id) as Promise<{ ok: boolean; message: string; exitCode: number | null }>,
   resumeCronJob: (id: string) => ipcRenderer.invoke(IpcChannels.resumeCronJob, id) as Promise<{ ok: boolean; message: string; exitCode: number | null }>,
   deleteCronJob: (id: string) => ipcRenderer.invoke(IpcChannels.deleteCronJob, id) as Promise<{ ok: boolean; message: string; exitCode: number | null }>,
+  listKanbanBoards: () => ipcRenderer.invoke(IpcChannels.listKanbanBoards) as Promise<HermesKanbanBoard[]>,
+  createKanbanBoard: (input: HermesKanbanCreateBoardInput) =>
+    ipcRenderer.invoke(IpcChannels.createKanbanBoard, input) as Promise<HermesKanbanActionResult>,
+  switchKanbanBoard: (slug: string) => ipcRenderer.invoke(IpcChannels.switchKanbanBoard, slug) as Promise<HermesKanbanActionResult>,
+  deleteKanbanBoard: (slug: string) => ipcRenderer.invoke(IpcChannels.deleteKanbanBoard, slug) as Promise<HermesKanbanActionResult>,
+  renameKanbanBoard: (input: { slug: string; name: string }) => ipcRenderer.invoke(IpcChannels.renameKanbanBoard, input) as Promise<HermesKanbanActionResult>,
+  dispatchKanban: (board?: string) => ipcRenderer.invoke(IpcChannels.dispatchKanban, board) as Promise<HermesKanbanActionResult>,
+  listKanbanTasks: (options?: HermesKanbanTaskListOptions) =>
+    ipcRenderer.invoke(IpcChannels.listKanbanTasks, options) as Promise<HermesKanbanTask[]>,
+  createKanbanTask: (input: HermesKanbanCreateTaskInput) =>
+    ipcRenderer.invoke(IpcChannels.createKanbanTask, input) as Promise<HermesKanbanTask>,
+  getKanbanTask: (input: { board?: string; taskId: string }) =>
+    ipcRenderer.invoke(IpcChannels.getKanbanTask, input) as Promise<HermesKanbanTask>,
+  runKanbanTaskAction: (input: HermesKanbanTaskActionInput) =>
+    ipcRenderer.invoke(IpcChannels.runKanbanTaskAction, input) as Promise<HermesKanbanActionResult>,
+  listKanbanDiagnostics: (input?: { board?: string; taskId?: string; severity?: string }) =>
+    ipcRenderer.invoke(IpcChannels.listKanbanDiagnostics, input) as Promise<HermesKanbanDiagnostic[]>,
+  listKanbanAssignees: (board?: string) =>
+    ipcRenderer.invoke(IpcChannels.listKanbanAssignees, board) as Promise<HermesKanbanAssignee[]>,
+  readKanbanTaskLog: (input: { board?: string; taskId: string; tail?: number }) =>
+    ipcRenderer.invoke(IpcChannels.readKanbanTaskLog, input) as Promise<HermesKanbanActionResult>,
+  commentKanbanTask: (input: { board?: string; taskId: string; text: string; author?: string }) =>
+    ipcRenderer.invoke(IpcChannels.commentKanbanTask, input) as Promise<HermesKanbanActionResult>,
   previewFile: (filePath: string) => ipcRenderer.invoke(IpcChannels.previewFile, filePath) as Promise<FilePreviewResult>,
   getFileBreadcrumb: (filePath: string) => ipcRenderer.invoke(IpcChannels.getFileBreadcrumb, filePath) as Promise<FileBreadcrumbItem[]>,
   getGitInfo: (workspacePath: string) =>

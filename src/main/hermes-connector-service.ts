@@ -646,12 +646,12 @@ export class HermesConnectorService {
       return;
     }
     const backoffMs = this.gatewayRestartCount <= 1
-      ? 5_000
+      ? 3_000
       : this.gatewayRestartCount <= 3
-        ? 15_000
+        ? 10_000
         : this.gatewayRestartCount <= 5
-          ? 60_000
-          : 300_000;
+          ? 30_000
+          : 60_000;
     this.gatewayBackoffUntil = new Date(Date.now() + backoffMs).toISOString();
     this.gatewayAutoStartMessage = `Gateway 异常退出，将在 ${Math.round(backoffMs / 1000)} 秒后自动重启（第 ${this.gatewayRestartCount} 次）...`;
     this.gatewayAutoRestartTimer = setTimeout(() => {

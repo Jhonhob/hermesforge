@@ -314,7 +314,7 @@ export type WorkSession = {
   clearedAt?: string;
 };
 
-export type SessionMetaPatch = Partial<Pick<WorkSession, "pinned" | "tags" | "status">> & {
+export type SessionMetaPatch = Partial<Pick<WorkSession, "pinned" | "tags" | "status" | "title">> & {
   projectId?: string | null;
 };
 
@@ -434,6 +434,154 @@ export type HermesCronJob = {
   deliver?: string;
   skills?: string[];
   script?: string;
+  scriptContent?: string;
+  noAgent?: boolean;
+  workdir?: string;
+};
+
+export type HermesKanbanTaskStatus = "todo" | "ready" | "running" | "blocked" | "done" | "archived" | string;
+
+export type HermesKanbanBoard = {
+  slug: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  is_current?: boolean;
+  counts?: Record<string, number>;
+  total?: number;
+  path?: string;
+  created_at?: string | number;
+  updated_at?: string | number;
+};
+
+export type HermesKanbanRun = {
+  id?: string | number;
+  task_id?: string;
+  profile?: string;
+  step_key?: string;
+  status?: string;
+  outcome?: string;
+  assignee?: string;
+  summary?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+  worker_pid?: number;
+  started_at?: string | number;
+  finished_at?: string | number;
+  ended_at?: string | number;
+  output?: string;
+  [key: string]: unknown;
+};
+
+export type HermesKanbanDiagnostic = {
+  task_id?: string;
+  title?: string;
+  status?: string;
+  assignee?: string;
+  severity?: string;
+  message?: string;
+  diagnostics?: Array<{
+    id?: string;
+    severity?: string;
+    title?: string;
+    message?: string;
+    suggested_actions?: string[];
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+};
+
+export type HermesKanbanTask = {
+  id: string;
+  title: string;
+  body?: string;
+  status: HermesKanbanTaskStatus;
+  assignee?: string;
+  priority?: string | number;
+  tenant?: string;
+  workspace_kind?: string;
+  workspace_path?: string;
+  skills?: string[];
+  result?: string;
+  created_by?: string;
+  created_at?: string | number;
+  updated_at?: string | number;
+  started_at?: string | number;
+  completed_at?: string | number;
+  max_retries?: number;
+  parents?: string[];
+  children?: string[];
+  runs?: HermesKanbanRun[];
+  diagnostics?: HermesKanbanDiagnostic[];
+  latest_summary?: string;
+  comments?: Array<{ id?: string | number; author?: string; body?: string; created_at?: string | number }>;
+  events?: Array<{ id?: string | number; kind?: string; type?: string; payload?: unknown; created_at?: string | number; run_id?: string | number }>;
+  [key: string]: unknown;
+};
+
+export type HermesKanbanAssignee = {
+  id?: string;
+  name: string;
+  label?: string;
+  running?: number;
+  ready?: number;
+  blocked?: number;
+  done?: number;
+  [key: string]: unknown;
+};
+
+export type HermesKanbanActionResult = {
+  ok: boolean;
+  message: string;
+  exitCode: number | null;
+  stdout?: string;
+  stderr?: string;
+};
+
+export type HermesKanbanCreateBoardInput = {
+  slug: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  switchTo?: boolean;
+};
+
+export type HermesKanbanTaskListOptions = {
+  board?: string;
+  status?: string;
+  assignee?: string;
+  archived?: boolean;
+  mine?: boolean;
+  tenant?: string;
+};
+
+export type HermesKanbanCreateTaskInput = {
+  board?: string;
+  title: string;
+  body?: string;
+  assignee?: string;
+  priority?: string;
+  tenant?: string;
+  workspaceKind?: "scratch" | "worktree" | "dir";
+  workspacePath?: string;
+  skills?: string[];
+  maxRetries?: number;
+  triage?: boolean;
+};
+
+export type HermesKanbanTaskAction = "assign" | "reassign" | "reclaim" | "complete" | "block" | "unblock" | "archive" | "edit" | "specify";
+
+export type HermesKanbanTaskActionInput = {
+  board?: string;
+  taskId: string;
+  action: HermesKanbanTaskAction;
+  assignee?: string;
+  reason?: string;
+  result?: string;
+  summary?: string;
+  reclaim?: boolean;
 };
 
 export type HermesConnectorPlatformId =
@@ -652,7 +800,7 @@ export type ToolCardModel = {
 };
 
 export type ThemePreference = {
-  id: "green-light" | "light" | "slate" | "oled";
+  id: "green-light" | "light" | "slate" | "oled" | "default-large";
   label: string;
 };
 

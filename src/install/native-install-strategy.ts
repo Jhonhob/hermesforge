@@ -30,7 +30,8 @@ import { resolveInstallSource } from "./install-source";
 import type { InstallSource } from "./install-source";
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
-const OFFICIAL_WINDOWS_INSTALLER_URL = "https://res1.hermesagent.org.cn/install.ps1";
+const OFFICIAL_WINDOWS_INSTALLER_URL = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1";
+const OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL = "https://res1.hermesagent.org.cn/install.ps1";
 const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent.git";
 
 type PythonLauncher = { command: string; argsPrefix: string[]; label: string };
@@ -308,6 +309,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       }
       log.push(`Hermes home: ${hermesHome}`);
       log.push(`Official installer: ${OFFICIAL_WINDOWS_INSTALLER_URL}`);
+      log.push(`Official installer fallback: ${OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL}`);
 
       await this.assertWritableDirectory(logDir, "安装日志目录", log);
       await this.assertWritableDirectory(parentDir, "Hermes 安装父目录", log);
@@ -335,31 +337,15 @@ export class NativeInstallStrategy implements InstallStrategy {
       }
 
       emit("cloning", 20, "正在下载 Hermes 官方 Windows 安装脚本。", OFFICIAL_WINDOWS_INSTALLER_URL);
-      const downloadScript = [
-        "$ProgressPreference='SilentlyContinue';",
-        `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;`,
-        `Invoke-WebRequest -UseBasicParsing -Uri ${psQuote(OFFICIAL_WINDOWS_INSTALLER_URL)} -OutFile ${psQuote(scriptPath)};`,
-      ].join(" ");
-      const download = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", downloadScript], logDir, log, 120_000);
-      if (download.exitCode !== 0) {
+      const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log);
+      if (!download.ok) {
         return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本下载失败，详情见安装日志：${logPath}` }, "failed");
       }
       await this.patchOfficialInstallerScript(scriptPath, log);
 
       emit("installing_dependencies", 45, "正在运行 Hermes 官方 Windows 安装脚本。", rootPath);
-      const installerArgs = [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        scriptPath,
-        "-SkipSetup",
-        "-WithSystemPackages",
-        "-HermesHome",
-        hermesHome,
-        "-InstallDir",
-        rootPath,
-      ];
+      const installerArgs = await this.officialInstallerArgs(scriptPath, hermesHome, rootPath);
+      log.push(`Official installer args: ${installerArgs.join(" ")}`);
       const install = await this.runLogged("powershell.exe", installerArgs, logDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
         onHeartbeat: (elapsedSeconds) => {
@@ -374,6 +360,9 @@ export class NativeInstallStrategy implements InstallStrategy {
       if (install.exitCode !== 0) {
         return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本执行失败，详情见安装日志：${logPath}` }, "failed");
       }
+      if (this.officialInstallerReportedFailure(install.stdout, install.stderr)) {
+        return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本报告失败，详情见安装日志：${logPath}` }, "failed");
+      }
 
       emit("health_check", 82, "正在校验 Hermes 是否可启动。", rootPath);
       const localHealth = await this.checkInstalledHermes(rootPath, log);
@@ -387,6 +376,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       await this.repairVenvBestEffort(rootPath, log);
 
       await this.verifyHermesHomeWritable(hermesHome, log);
+      await this.recordManagedWindowsTools(hermesHome, log);
       await this.writeManagedMarker(rootPath);
       const previousHermesRoot = (await this.configStore.read()).enginePaths?.hermes;
       await this.saveHermesRoot(rootPath);
@@ -433,6 +423,49 @@ export class NativeInstallStrategy implements InstallStrategy {
         : "请查看安装日志；如果 winget 或网络策略不可用，请按日志中的手动命令安装缺失依赖。",
       plan: result.plan ?? await this.plan({ rootPath, mode: "windows" }),
     };
+  }
+
+  private async downloadOfficialInstallerScript(scriptPath: string, cwd: string, log: string[]) {
+    for (const url of [OFFICIAL_WINDOWS_INSTALLER_URL, OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL]) {
+      const downloadScript = [
+        "$ProgressPreference='SilentlyContinue';",
+        `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;`,
+        `Invoke-WebRequest -UseBasicParsing -Uri ${psQuote(url)} -OutFile ${psQuote(scriptPath)};`,
+      ].join(" ");
+      const result = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", downloadScript], cwd, log, 120_000);
+      if (result.exitCode === 0 && await this.exists(scriptPath)) {
+        log.push(`Official installer downloaded from ${url}.`);
+        return { ok: true, url };
+      }
+      log.push(`Official installer download failed from ${url}; trying next source if available.`);
+    }
+    return { ok: false };
+  }
+
+  private async officialInstallerArgs(scriptPath: string, hermesHome: string, rootPath: string) {
+    const script = await fs.readFile(scriptPath, "utf8").catch(() => "");
+    const supportsWithSystemPackages = /(?:param\s*\(|,)\s*\[switch\]\s*\$WithSystemPackages\b/i.test(script);
+    const args = [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+      "-SkipSetup",
+      "-HermesHome",
+      hermesHome,
+      "-InstallDir",
+      rootPath,
+    ];
+    if (supportsWithSystemPackages) {
+      args.splice(6, 0, "-WithSystemPackages");
+    }
+    return args;
+  }
+
+  private officialInstallerReportedFailure(stdout: string, stderr: string) {
+    const output = `${stdout}\n${stderr}`;
+    return /Installation failed:|uv installation failed|Python .* not available|Git not available and auto-install failed|Failed to download repository/i.test(output);
   }
 
   private async repairWithWinget(id: SetupDependencyRepairId, label: string, packageId: string): Promise<InstallStrategyRepairResult> {
@@ -951,6 +984,46 @@ export class NativeInstallStrategy implements InstallStrategy {
     log.push(`Hermes home 可写：${hermesHome}`);
   }
 
+  private async recordManagedWindowsTools(hermesHome: string, log: string[]) {
+    if (process.platform !== "win32") return;
+    const gitRoot = path.join(hermesHome, "git");
+    const pathEntries = [
+      path.join(gitRoot, "cmd"),
+      path.join(gitRoot, "bin"),
+      path.join(gitRoot, "usr", "bin"),
+    ];
+    const existingPathEntries: string[] = [];
+    for (const entry of pathEntries) {
+      if (await this.exists(entry)) existingPathEntries.push(entry);
+    }
+    if (existingPathEntries.length) {
+      this.prependProcessPath(existingPathEntries);
+      log.push(`Added managed Git paths to current process PATH: ${existingPathEntries.join(";")}`);
+    }
+
+    const bashCandidates = [
+      path.join(gitRoot, "bin", "bash.exe"),
+      path.join(gitRoot, "usr", "bin", "bash.exe"),
+    ];
+    const bashPath = await this.firstExistingPath(bashCandidates);
+    if (bashPath) {
+      process.env.HERMES_GIT_BASH_PATH = bashPath;
+      log.push(`Detected managed Git Bash: ${bashPath}`);
+      const persist = await this.runLogged(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          `[Environment]::SetEnvironmentVariable('HERMES_GIT_BASH_PATH', ${psQuote(bashPath)}, 'User')`,
+        ],
+        process.cwd(),
+        log,
+        15_000,
+      ).catch(() => undefined);
+      if (persist?.exitCode === 0) log.push("Persisted HERMES_GIT_BASH_PATH for future launches.");
+    }
+  }
+
   private async hasVenv(rootPath: string) {
     return await this.exists(path.join(rootPath, "venv", "Scripts", "python.exe"))
       || await this.exists(path.join(rootPath, ".venv", "Scripts", "python.exe"))
@@ -1040,6 +1113,25 @@ export class NativeInstallStrategy implements InstallStrategy {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  private async firstExistingPath(paths: string[]) {
+    for (const candidate of paths) {
+      if (await this.exists(candidate)) return candidate;
+    }
+    return undefined;
+  }
+
+  private prependProcessPath(entries: string[]) {
+    const key = process.platform === "win32" ? "Path" : "PATH";
+    const current = process.env[key] ?? process.env.PATH ?? "";
+    const currentItems = current.split(path.delimiter).filter(Boolean);
+    const normalized = new Set(currentItems.map((item) => path.resolve(item).toLowerCase()));
+    const nextEntries = entries.filter((entry) => !normalized.has(path.resolve(entry).toLowerCase()));
+    if (nextEntries.length) {
+      process.env[key] = [...nextEntries, ...currentItems].join(path.delimiter);
+      if (key !== "PATH") process.env.PATH = process.env[key];
     }
   }
 }

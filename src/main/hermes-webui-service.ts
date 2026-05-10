@@ -10,6 +10,15 @@ import { validateSkillId, validateProfileName, validateCronSchedule, validateSki
 import type {
   FilePreviewResult,
   FileBreadcrumbItem,
+  HermesKanbanActionResult,
+  HermesKanbanAssignee,
+  HermesKanbanBoard,
+  HermesKanbanCreateBoardInput,
+  HermesKanbanCreateTaskInput,
+  HermesKanbanDiagnostic,
+  HermesKanbanTask,
+  HermesKanbanTaskActionInput,
+  HermesKanbanTaskListOptions,
   HermesCronJob,
   HermesMemoryFile,
   HermesProfile,
@@ -40,6 +49,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/new", description: "新建会话", usage: "/new" },
   { name: "/usage", description: "显示/隐藏用量", usage: "/usage" },
   { name: "/theme", description: "切换主题", usage: "/theme <green-light|light|slate|oled>" },
+  { name: "/goal", description: "设置或查看 Hermes 持久目标", usage: "/goal [text | pause | resume | clear | status]" },
 ];
 
 export class HermesWebUiService {
@@ -472,6 +482,8 @@ export class HermesWebUiService {
         deliver,
         skills: Array.isArray(record.skills) ? record.skills.map(String).filter(Boolean) : typeof record.skill === "string" ? [record.skill] : undefined,
         script: typeof record.script === "string" ? record.script : undefined,
+        noAgent: Boolean(record.no_agent ?? record.noAgent),
+        workdir: typeof record.workdir === "string" ? record.workdir : typeof record.cwd === "string" ? record.cwd : undefined,
       };
     });
   }
@@ -493,9 +505,29 @@ export class HermesWebUiService {
     const name = input.name.trim();
     const schedule = input.schedule?.trim() || existing?.schedule || "30m";
     const prompt = input.prompt ?? existing?.prompt ?? "";
-    const cliArgs = input.id
-      ? ["cron", "edit", input.id, "--name", name, "--schedule", schedule, "--prompt", prompt]
-      : ["cron", "create", "--name", name, schedule, prompt];
+    const noAgent = input.noAgent ?? existing?.noAgent ?? false;
+    const script = await this.prepareCronScript(input, existing, name);
+    const deliver = input.deliver ?? existing?.deliver;
+    const workdir = input.workdir ?? existing?.workdir;
+    const skills = input.skills ?? existing?.skills;
+    if (noAgent && !script) {
+      throw new Error("脚本看门狗模式需要指定脚本文件或填写脚本内容。");
+    }
+    if (!noAgent && !prompt.trim()) {
+      throw new Error("Agent 任务需要填写 prompt。");
+    }
+    const cliArgs = this.buildCronSaveArgs({
+      id: input.id,
+      name,
+      schedule,
+      prompt,
+      noAgent,
+      script,
+      deliver,
+      workdir,
+      skills,
+      noAgentChanged: typeof input.noAgent === "boolean",
+    });
     const cliResult = await this.runHermes(cliArgs);
     if (!cliResult.ok) {
       throw new Error(`Hermes 原生定时任务保存失败：${cliResult.message || `exit ${cliResult.exitCode}`}`);
@@ -512,7 +544,147 @@ export class HermesWebUiService {
       status: input.status ?? "active",
       source: "cli",
       lastOutput: cliResult.message,
+      noAgent,
+      script,
+      deliver,
+      workdir,
+      skills,
     };
+  }
+
+  async listKanbanBoards(): Promise<HermesKanbanBoard[]> {
+    return this.normalizeKanbanBoards(await this.runHermesJson<unknown>(["kanban", "boards", "list", "--json"]));
+  }
+
+  async createKanbanBoard(input: HermesKanbanCreateBoardInput): Promise<HermesKanbanActionResult> {
+    const slug = this.requireSlug(input.slug, "看板 slug");
+    const args = ["kanban", "boards", "create", slug];
+    this.pushOptional(args, "--name", input.name);
+    this.pushOptional(args, "--description", input.description);
+    this.pushOptional(args, "--icon", input.icon);
+    this.pushOptional(args, "--color", input.color);
+    if (input.switchTo !== false) args.push("--switch");
+    return this.runKanbanAction(args);
+  }
+
+  async switchKanbanBoard(slug: string): Promise<HermesKanbanActionResult> {
+    return this.runKanbanAction(["kanban", "boards", "switch", this.requireSlug(slug, "看板 slug")]);
+  }
+
+  async deleteKanbanBoard(slug: string): Promise<HermesKanbanActionResult> {
+    return this.runKanbanAction(["kanban", "boards", "rm", this.requireSlug(slug, "看板 slug"), "--delete"]);
+  }
+
+  async renameKanbanBoard(slug: string, name: string): Promise<HermesKanbanActionResult> {
+    return this.runKanbanAction(["kanban", "boards", "rename", this.requireSlug(slug, "看板 slug"), name.trim()]);
+  }
+
+  async dispatchKanban(board?: string): Promise<HermesKanbanActionResult> {
+    return this.runKanbanAction([...this.kanbanBaseArgs(board), "dispatch"]);
+  }
+
+  async listKanbanTasks(options: HermesKanbanTaskListOptions = {}): Promise<HermesKanbanTask[]> {
+    const args = [...this.kanbanBaseArgs(options.board), "list", "--json"];
+    this.pushOptional(args, "--status", options.status);
+    this.pushOptional(args, "--assignee", options.assignee);
+    this.pushOptional(args, "--tenant", options.tenant);
+    if (options.archived) args.push("--archived");
+    if (options.mine) args.push("--mine");
+    return this.normalizeKanbanTasks(await this.runHermesJson<unknown>(args));
+  }
+
+  async createKanbanTask(input: HermesKanbanCreateTaskInput): Promise<HermesKanbanTask> {
+    const title = input.title?.trim();
+    if (!title) throw new Error("任务标题不能为空。");
+    const args = [...this.kanbanBaseArgs(input.board), "create", title, "--json"];
+    this.pushOptional(args, "--body", input.body);
+    this.pushOptional(args, "--assignee", input.assignee);
+    this.pushOptional(args, "--priority", input.priority);
+    this.pushOptional(args, "--tenant", input.tenant);
+    if (input.triage) args.push("--triage");
+    if (input.workspaceKind) args.push("--workspace", input.workspaceKind === "dir" && input.workspacePath ? `dir:${input.workspacePath}` : input.workspaceKind);
+    for (const skill of input.skills ?? []) this.pushOptional(args, "--skill", skill);
+    if (typeof input.maxRetries === "number") args.push("--max-retries", String(input.maxRetries));
+    return this.normalizeKanbanTask(await this.runHermesJson<unknown>(args));
+  }
+
+  async getKanbanTask(input: { board?: string; taskId: string }): Promise<HermesKanbanTask> {
+    const args = [...this.kanbanBaseArgs(input.board), "show", this.requireId(input.taskId, "任务 ID"), "--json"];
+    return this.normalizeKanbanTask(await this.runHermesJson<unknown>(args));
+  }
+
+  async runKanbanTaskAction(input: HermesKanbanTaskActionInput): Promise<HermesKanbanActionResult> {
+    const taskId = this.requireId(input.taskId, "任务 ID");
+    const args = [...this.kanbanBaseArgs(input.board)];
+    if (input.action === "assign") {
+      const assignee = input.assignee?.trim();
+      if (!assignee) throw new Error("assign 操作需要指定 assignee。");
+      args.push("assign", taskId, assignee);
+    } else if (input.action === "reassign") {
+      const assignee = input.assignee?.trim();
+      if (!assignee) throw new Error("reassign 操作需要指定 assignee。");
+      args.push("reassign", taskId, assignee);
+      if (input.reclaim) args.push("--reclaim");
+      this.pushOptional(args, "--reason", input.reason);
+    } else if (input.action === "reclaim") {
+      args.push("reclaim", taskId);
+      this.pushOptional(args, "--reason", input.reason);
+    } else if (input.action === "complete") {
+      args.push("complete", taskId);
+      this.pushOptional(args, "--result", input.result);
+    } else if (input.action === "edit") {
+      args.push("edit", taskId);
+      if (!input.result?.trim()) throw new Error("edit 操作需要指定 result。");
+      args.push("--result", input.result.trim());
+      this.pushOptional(args, "--summary", input.summary);
+    } else if (input.action === "specify") {
+      args.push("specify", taskId);
+    } else if (input.action === "block") {
+      const reason = input.reason?.trim();
+      if (!reason) throw new Error("block 操作需要填写原因。");
+      args.push("block", taskId, reason);
+    } else if (input.action === "unblock") {
+      args.push("unblock", taskId);
+    } else if (input.action === "archive") {
+      args.push("archive", taskId);
+    } else {
+      throw new Error(`不支持的 Kanban 操作：${input.action}`);
+    }
+    return this.runKanbanAction(args);
+  }
+
+  async listKanbanDiagnostics(input: { board?: string; taskId?: string; severity?: string } = {}): Promise<HermesKanbanDiagnostic[]> {
+    const args = [...this.kanbanBaseArgs(input.board), "diagnostics", "--json"];
+    this.pushOptional(args, "--task", input.taskId);
+    this.pushOptional(args, "--severity", input.severity);
+    const parsed = await this.runHermesJson<unknown>(args);
+    return Array.isArray(parsed) ? parsed.map((item) => item as HermesKanbanDiagnostic) : [];
+  }
+
+  async listKanbanAssignees(board?: string): Promise<HermesKanbanAssignee[]> {
+    const parsed = await this.runHermesJson<unknown>([...this.kanbanBaseArgs(board), "assignees", "--json"]);
+    if (Array.isArray(parsed)) return parsed.map((item) => this.normalizeKanbanAssignee(item));
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed as Record<string, unknown>).map(([name, value]) => ({
+        name,
+        ...(value && typeof value === "object" ? value as Record<string, unknown> : {}),
+      }));
+    }
+    return [];
+  }
+
+  async readKanbanTaskLog(input: { board?: string; taskId: string; tail?: number }): Promise<HermesKanbanActionResult> {
+    const tail = Math.max(1, Math.min(5000, Math.floor(input.tail ?? 400)));
+    return this.runKanbanAction([...this.kanbanBaseArgs(input.board), "log", this.requireId(input.taskId, "任务 ID"), "--tail", String(tail)], { timeoutMs: 30000 });
+  }
+
+  async commentKanbanTask(input: { board?: string; taskId: string; text: string; author?: string }): Promise<HermesKanbanActionResult> {
+    const taskId = this.requireId(input.taskId, "任务 ID");
+    const text = input.text?.trim();
+    if (!text) throw new Error("评论内容不能为空。");
+    const args = [...this.kanbanBaseArgs(input.board), "comment", taskId, text];
+    this.pushOptional(args, "--author", input.author);
+    return this.runKanbanAction(args);
   }
 
   async runCronJob(id: string) {
@@ -577,6 +749,160 @@ export class HermesWebUiService {
     return [];
   }
 
+  private buildCronSaveArgs(input: {
+    id?: string;
+    name: string;
+    schedule: string;
+    prompt: string;
+    noAgent: boolean;
+    script?: string;
+    deliver?: string;
+    workdir?: string;
+    skills?: string[];
+    noAgentChanged: boolean;
+  }) {
+    const args = input.id
+      ? ["cron", "edit", input.id, "--name", input.name, "--schedule", input.schedule]
+      : ["cron", "create", "--name", input.name];
+    if (input.id) {
+      args.push("--prompt", input.noAgent && !input.prompt.trim() ? "" : input.prompt);
+    }
+    this.pushOptional(args, "--deliver", input.deliver);
+    this.pushOptional(args, "--script", input.script);
+    this.pushOptional(args, "--workdir", input.workdir);
+    if (input.noAgent) {
+      args.push("--no-agent");
+    } else if (input.noAgentChanged && input.id) {
+      args.push("--agent");
+    }
+    if (input.id && input.skills) {
+      if (input.skills.length === 0) args.push("--clear-skills");
+      for (const skill of input.skills) this.pushOptional(args, "--skill", skill);
+    } else {
+      for (const skill of input.skills ?? []) this.pushOptional(args, "--skill", skill);
+    }
+    if (!input.id) {
+      args.push(input.schedule);
+      if (!input.noAgent || input.prompt.trim()) args.push(input.prompt);
+    }
+    return args;
+  }
+
+  private async prepareCronScript(input: Partial<HermesCronJob>, existing: HermesCronJob | undefined, name: string) {
+    const scriptFromInput = typeof input.script === "string" ? input.script.trim() : undefined;
+    const scriptContent = typeof input.scriptContent === "string" ? input.scriptContent : undefined;
+    if (scriptContent !== undefined) {
+      const relativeName = scriptFromInput || existing?.script || `${this.safeScriptBaseName(name)}.py`;
+      return this.writeCronScript(relativeName, scriptContent);
+    }
+    return scriptFromInput ?? existing?.script;
+  }
+
+  private async writeCronScript(relativeName: string, content: string) {
+    if (!content.trim()) throw new Error("脚本内容不能为空。");
+    const normalized = this.validateCronScriptRelativePath(relativeName);
+    const scriptsRoot = path.resolve(await this.currentHermesHome(), "scripts");
+    const target = path.resolve(scriptsRoot, normalized);
+    if (!target.toLowerCase().startsWith(`${scriptsRoot.toLowerCase()}${path.sep}`) && target.toLowerCase() !== scriptsRoot.toLowerCase()) {
+      throw new Error("脚本路径必须位于 Hermes Home 的 scripts/ 目录内。");
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+    return path.relative(scriptsRoot, target).replace(/\\/g, "/");
+  }
+
+  private validateCronScriptRelativePath(relativeName: string) {
+    const value = relativeName.trim().replace(/\\/g, "/");
+    if (!value) throw new Error("脚本文件名不能为空。");
+    if (path.isAbsolute(value) || /^[a-zA-Z]:\//.test(value)) throw new Error("脚本文件名不能是绝对路径。");
+    const parts = value.split("/").filter(Boolean);
+    if (parts.some((part) => part === ".." || part === ".")) throw new Error("脚本文件名不能包含路径穿越。");
+    if (parts.some((part) => part.startsWith("."))) throw new Error("脚本文件名不能是隐藏路径。");
+    return parts.join("/");
+  }
+
+  private safeScriptBaseName(name: string) {
+    return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || `watchdog-${Date.now().toString(36)}`;
+  }
+
+  private kanbanBaseArgs(board?: string) {
+    const args = ["kanban"];
+    const slug = board?.trim();
+    if (slug) args.push("--board", this.requireSlug(slug, "看板 slug"));
+    return args;
+  }
+
+  private async runKanbanAction(args: string[], options: { timeoutMs?: number } = {}): Promise<HermesKanbanActionResult> {
+    const result = await this.runHermes(args, options);
+    if (!result.ok) {
+      throw new Error(`Hermes Kanban 命令失败：${result.stderr || result.stdout || result.message || `exit ${result.exitCode}`}`);
+    }
+    return result;
+  }
+
+  private normalizeKanbanBoards(raw: unknown): HermesKanbanBoard[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item, index) => {
+      const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return {
+        ...record,
+        slug: String(record.slug ?? record.id ?? record.name ?? `board-${index}`),
+        name: typeof record.name === "string" ? record.name : undefined,
+        counts: record.counts && typeof record.counts === "object" ? this.numberRecord(record.counts as Record<string, unknown>) : undefined,
+      } as HermesKanbanBoard;
+    });
+  }
+
+  private normalizeKanbanTasks(raw: unknown): HermesKanbanTask[] {
+    return Array.isArray(raw) ? raw.map((item) => this.normalizeKanbanTask(item)) : [];
+  }
+
+  private normalizeKanbanTask(raw: unknown): HermesKanbanTask {
+    const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    const task = record.task && typeof record.task === "object" ? record.task as Record<string, unknown> : record;
+    return {
+      ...record,
+      ...task,
+      id: String(task.id ?? record.id ?? ""),
+      title: String(task.title ?? record.title ?? "Untitled task"),
+      status: String(task.status ?? record.status ?? "todo"),
+      runs: Array.isArray(record.runs) ? record.runs as HermesKanbanTask["runs"] : Array.isArray(task.runs) ? task.runs as HermesKanbanTask["runs"] : undefined,
+      diagnostics: Array.isArray(record.diagnostics) ? record.diagnostics as HermesKanbanDiagnostic[] : Array.isArray(task.diagnostics) ? task.diagnostics as HermesKanbanDiagnostic[] : undefined,
+    };
+  }
+
+  private normalizeKanbanAssignee(raw: unknown): HermesKanbanAssignee {
+    const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    return {
+      ...record,
+      name: String(record.name ?? record.id ?? record.assignee ?? "unknown"),
+    };
+  }
+
+  private numberRecord(record: Record<string, unknown>) {
+    return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, typeof value === "number" ? value : Number(value) || 0]));
+  }
+
+  private pushOptional(args: string[], flag: string, value: unknown) {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (trimmed) args.push(flag, trimmed);
+  }
+
+  private requireSlug(value: string, label: string) {
+    const trimmed = value.trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(trimmed)) {
+      throw new Error(`${label} 只能包含字母、数字、下划线和短横线，且不能以符号开头。`);
+    }
+    return trimmed;
+  }
+
+  private requireId(value: string, label: string) {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > 160) throw new Error(`${label} 无效。`);
+    return trimmed;
+  }
+
   async previewFile(filePath: string): Promise<FilePreviewResult> {
     const stat = await fs.stat(filePath);
     if (stat.isDirectory()) {
@@ -624,6 +950,23 @@ export class HermesWebUiService {
     return { ok: !error, message: error || `已打开：${targetPath}` };
   }
 
+  private async runHermesJson<T>(args: string[], options: { timeoutMs?: number } = {}): Promise<T> {
+    const result = await this.runHermes(args, options);
+    if (!result.ok) {
+      throw new Error(`Hermes CLI 调用失败：${result.stderr || result.stdout || result.message || `exit ${result.exitCode}`}`);
+    }
+    const stdout = result.stdout.trim();
+    try {
+      return JSON.parse(stdout) as T;
+    } catch (error) {
+      const detail = [
+        `stdout: ${stdout || "(empty)"}`,
+        `stderr: ${result.stderr.trim() || "(empty)"}`,
+      ].join("\n");
+      throw new Error(`Hermes CLI 没有返回有效 JSON。\n${detail}`);
+    }
+  }
+
   private async runHermes(args: string[], options: { timeoutMs?: number } = {}) {
     const root = await this.resolveHermesRoot();
     const currentHermesHome = await this.currentHermesHome();
@@ -656,7 +999,13 @@ export class HermesWebUiService {
       commandId: "webui.hermes",
       runtimeKind: runtime?.mode ?? "windows",
     });
-    return { ok: result.exitCode === 0, message: result.stdout || result.stderr, exitCode: result.exitCode };
+    return {
+      ok: result.exitCode === 0,
+      message: result.stdout || result.stderr,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    };
   }
 
   private async currentRuntime() {
@@ -694,7 +1043,7 @@ export class HermesWebUiService {
   }
 
   private theme(value: unknown): ThemePreference["id"] {
-    return value === "light" || value === "slate" || value === "oled" ? value : "green-light";
+    return value === "light" || value === "slate" || value === "oled" || value === "default-large" ? value : "green-light";
   }
 
   private async baseHermesHome() {

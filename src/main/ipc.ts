@@ -95,7 +95,7 @@ const BLOCKED_OPEN_PATH_EXTENSIONS = new Set([
   ".app", ".dmg", ".pkg", // macOS
 ]);
 const attachmentSourcePathsSchema = z.array(workspacePathInputSchema).max(12);
-const setupDependencyRepairIdSchema = z.enum(["git", "python", "hermes_pyyaml", "weixin_aiohttp"]);
+const setupDependencyRepairIdSchema = z.enum(["git", "python", "hermes_pyyaml", "hermes_python_dotenv", "weixin_aiohttp"]);
 const installHermesOptionsSchema = z.object({
   rootPath: z.string().trim().min(1).max(1000).optional(),
 }).optional();
@@ -111,6 +111,63 @@ const oneClickDiagnosticsRunOptionsSchema = z.object({
 const sponsorSubmitInputSchema = z.object({
   supporterId: z.string().trim().min(1).max(48),
   message: z.string().trim().max(1000).optional(),
+});
+const kanbanSlugSchema = z.string().trim().min(1).max(80).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
+const kanbanIdSchema = z.string().trim().min(1).max(160);
+const kanbanCreateBoardSchema = z.object({
+  slug: kanbanSlugSchema,
+  name: z.string().trim().max(120).optional(),
+  description: z.string().trim().max(1000).optional(),
+  icon: z.string().trim().max(20).optional(),
+  color: z.string().trim().max(40).optional(),
+  switchTo: z.boolean().optional(),
+});
+const kanbanTaskListSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  status: z.string().trim().max(40).optional(),
+  assignee: z.string().trim().max(120).optional(),
+  archived: z.boolean().optional(),
+  mine: z.boolean().optional(),
+  tenant: z.string().trim().max(120).optional(),
+}).optional();
+const kanbanCreateTaskSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  title: z.string().trim().min(1).max(200),
+  body: z.string().max(20000).optional(),
+  assignee: z.string().trim().max(120).optional(),
+  priority: z.string().trim().max(40).optional(),
+  tenant: z.string().trim().max(120).optional(),
+  workspaceKind: z.enum(["scratch", "worktree", "dir"]).optional(),
+  workspacePath: z.string().trim().max(1000).optional(),
+  skills: z.array(z.string().trim().min(1).max(120)).max(20).optional(),
+  maxRetries: z.number().int().min(0).max(20).optional(),
+  triage: z.boolean().optional(),
+});
+const kanbanTaskActionSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  taskId: kanbanIdSchema,
+  action: z.enum(["assign", "reassign", "reclaim", "complete", "block", "unblock", "archive", "edit", "specify"]),
+  assignee: z.string().trim().max(120).optional(),
+  reason: z.string().trim().max(1000).optional(),
+  result: z.string().trim().max(4000).optional(),
+});
+const kanbanTaskRefSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  taskId: kanbanIdSchema,
+});
+const kanbanDiagnosticsSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  taskId: kanbanIdSchema.optional(),
+  severity: z.string().trim().max(40).optional(),
+}).optional();
+const kanbanLogSchema = kanbanTaskRefSchema.extend({
+  tail: z.number().int().min(1).max(5000).optional(),
+});
+const kanbanCommentSchema = z.object({
+  board: kanbanSlugSchema.optional(),
+  taskId: kanbanIdSchema,
+  text: z.string().trim().min(1).max(4000),
+  author: z.string().trim().max(120).optional(),
 });
 const DEFAULT_FEEDBACK_SYNC_ENDPOINT = "https://xiaoxiahome.icu/api/hermes-forge/feedback";
 const DEFAULT_FEEDBACK_WALL_ENDPOINT = "https://xiaoxiahome.icu/api/hermes-forge/feedback/recent?kind=feedback&limit=50";
@@ -502,6 +559,20 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
   ipcMain.handle(IpcChannels.pauseCronJob, (_event, id: string) => services.hermesWebUiService.pauseCronJob(sessionIdSchema.parse(id)));
   ipcMain.handle(IpcChannels.resumeCronJob, (_event, id: string) => services.hermesWebUiService.resumeCronJob(sessionIdSchema.parse(id)));
   ipcMain.handle(IpcChannels.deleteCronJob, (_event, id: string) => services.hermesWebUiService.deleteCronJob(sessionIdSchema.parse(id)));
+  ipcMain.handle(IpcChannels.listKanbanBoards, () => services.hermesWebUiService.listKanbanBoards());
+  ipcMain.handle(IpcChannels.createKanbanBoard, (_event, input) => services.hermesWebUiService.createKanbanBoard(kanbanCreateBoardSchema.parse(input ?? {})));
+  ipcMain.handle(IpcChannels.switchKanbanBoard, (_event, slug: string) => services.hermesWebUiService.switchKanbanBoard(kanbanSlugSchema.parse(slug)));
+  ipcMain.handle(IpcChannels.deleteKanbanBoard, (_event, slug: string) => services.hermesWebUiService.deleteKanbanBoard(kanbanSlugSchema.parse(slug)));
+  ipcMain.handle(IpcChannels.renameKanbanBoard, (_event, input) => services.hermesWebUiService.renameKanbanBoard(kanbanSlugSchema.parse(input.slug), z.string().trim().min(1).max(120).parse(input.name)));
+  ipcMain.handle(IpcChannels.dispatchKanban, (_event, board?: string) => services.hermesWebUiService.dispatchKanban(board ? kanbanSlugSchema.parse(board) : undefined));
+  ipcMain.handle(IpcChannels.listKanbanTasks, (_event, input) => services.hermesWebUiService.listKanbanTasks(kanbanTaskListSchema.parse(input ?? undefined) ?? {}));
+  ipcMain.handle(IpcChannels.createKanbanTask, (_event, input) => services.hermesWebUiService.createKanbanTask(kanbanCreateTaskSchema.parse(input ?? {})));
+  ipcMain.handle(IpcChannels.getKanbanTask, (_event, input) => services.hermesWebUiService.getKanbanTask(kanbanTaskRefSchema.parse(input ?? {})));
+  ipcMain.handle(IpcChannels.runKanbanTaskAction, (_event, input) => services.hermesWebUiService.runKanbanTaskAction(kanbanTaskActionSchema.parse(input ?? {})));
+  ipcMain.handle(IpcChannels.listKanbanDiagnostics, (_event, input) => services.hermesWebUiService.listKanbanDiagnostics(kanbanDiagnosticsSchema.parse(input ?? undefined) ?? {}));
+  ipcMain.handle(IpcChannels.listKanbanAssignees, (_event, board?: string) => services.hermesWebUiService.listKanbanAssignees(board ? kanbanSlugSchema.parse(board) : undefined));
+  ipcMain.handle(IpcChannels.readKanbanTaskLog, (_event, input) => services.hermesWebUiService.readKanbanTaskLog(kanbanLogSchema.parse(input ?? {})));
+  ipcMain.handle(IpcChannels.commentKanbanTask, (_event, input) => services.hermesWebUiService.commentKanbanTask(kanbanCommentSchema.parse(input ?? {})));
   ipcMain.handle(IpcChannels.previewFile, (_event, filePath: string) => services.hermesWebUiService.previewFile(workspacePathInputSchema.parse(filePath)));
   ipcMain.handle(IpcChannels.getFileBreadcrumb, (_event, filePath: string) => services.hermesWebUiService.fileBreadcrumb(workspacePathInputSchema.parse(filePath)));
   ipcMain.handle(IpcChannels.getGitInfo, (_event, workspacePath: string) => services.hermesWebUiService.gitInfo(workspacePathInputSchema.parse(workspacePath)));

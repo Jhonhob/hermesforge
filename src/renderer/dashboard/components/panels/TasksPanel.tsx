@@ -116,10 +116,13 @@ export function TasksPanel() {
                   <div className="mt-1.5 flex items-center gap-2 text-xs text-slate-500">
                     <CalendarClock size={12} />
                     <code className="font-mono">{job.schedule}</code>
+                    {job.noAgent ? <span className="rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] font-medium text-cyan-700">no_agent</span> : null}
                   </div>
                   {job.prompt && (
                     <p className="mt-2 line-clamp-2 text-sm text-slate-600">{job.prompt.slice(0, 120)}{job.prompt.length > 120 ? "..." : ""}</p>
                   )}
+                  {job.script ? <p className="mt-1 truncate text-xs text-slate-400">script: {job.script}</p> : null}
+                  {job.workdir ? <p className="mt-1 truncate text-xs text-slate-400">workdir: {job.workdir}</p> : null}
                 </div>
               </div>
 
@@ -196,13 +199,20 @@ export function TasksPanel() {
   );
 
   async function saveJob() {
-    if (!editing?.name?.trim() || !editing.prompt?.trim() || !editing.schedule?.trim()) return;
+    const hasScript = Boolean(editing?.script?.trim() || editing?.scriptContent?.trim());
+    if (!editing?.name?.trim() || !editing.schedule?.trim() || (editing.noAgent ? !hasScript : !editing.prompt?.trim())) return;
     const job: Partial<HermesCronJob> = {
       id: editing.id,
       name: editing.name.trim(),
       schedule: editing.schedule || "every 1h",
       prompt: editing.prompt || "",
       status: editing.status || "active",
+      script: editing.script?.trim(),
+      scriptContent: editing.scriptContent,
+      noAgent: Boolean(editing.noAgent),
+      deliver: editing.deliver?.trim(),
+      workdir: editing.workdir?.trim(),
+      skills: editing.skills,
     };
     try {
       await window.workbenchClient.saveCronJob(job);

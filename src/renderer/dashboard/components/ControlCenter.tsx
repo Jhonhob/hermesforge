@@ -9,6 +9,7 @@ import { ConnectorsPanel } from "./panels/ConnectorsPanel";
 import { ProfilesPanel } from "./panels/ProfilesPanel";
 import { SpacesPanel } from "./panels/SpacesPanel";
 import { ProjectsPanel } from "./panels/ProjectsPanel";
+import { KanbanPanel } from "./panels/KanbanPanel";
 
 type PanelId = ReturnType<typeof useAppStore.getState>["activePanel"];
 
@@ -20,6 +21,7 @@ interface PanelConfig {
 
 const panels: PanelConfig[] = [
   { id: "tasks", label: "定时任务", icon: CalendarClock },
+  { id: "kanban", label: "看板", icon: FolderKanban },
   { id: "skills", label: "技能", icon: Wrench },
   { id: "memory", label: "记忆", icon: BookOpen },
   { id: "connectors", label: "连接器", icon: ExternalLink },
@@ -78,6 +80,7 @@ export function ControlCenter(props: {
       <div className="hermes-panel-content custom-scrollbar flex-1 overflow-y-auto p-4">
         <div className="transition-opacity duration-200">
           {active === "tasks" ? <TasksPanel key="tasks" /> : null}
+          {active === "kanban" ? <KanbanPanel key="kanban" /> : null}
           {active === "skills" ? <SkillsPanel key="skills" /> : null}
           {active === "memory" ? <MemoryPanel key="memory" /> : null}
           {active === "connectors" ? <ConnectorsPanel key="connectors" /> : null}
@@ -94,6 +97,7 @@ function panelDescription(panel: PanelId): string {
   return {
     chat: "",
     tasks: "管理和配置定时任务",
+    kanban: "创建、执行和恢复 Hermes 任务",
     skills: "查看和编辑技能文件",
     memory: "管理记忆和用户偏好",
     connectors: "管理第三方服务接入",

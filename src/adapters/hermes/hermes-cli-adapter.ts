@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -154,6 +154,7 @@ export class HermesCliAdapter implements EngineAdapter {
   label = "Hermes";
   capabilities = ["file_memory", "private_skills", "context_bridge", "cli"] as const;
   private readonly liveCliSessionMappings = new Set<string>();
+  private readonly activeProcesses = new Set<ChildProcessWithoutNullStreams>();
   private cliCapabilityProbe?: { key: string; probe: Promise<HermesCliCapabilityProbe> };
 
   constructor(
@@ -503,8 +504,12 @@ export class HermesCliAdapter implements EngineAdapter {
 
 
   async stop(_sessionId: string) {
-    // Windows headless worker 和 WSL worker 已在架构重构中移除
-    return;
+    for (const proc of this.activeProcesses) {
+      if (!proc.killed) {
+        proc.kill("SIGTERM");
+      }
+    }
+    this.activeProcesses.clear();
   }
 
   async getMemoryStatus(workspaceId: string): Promise<MemoryStatus> {
@@ -862,12 +867,14 @@ export class HermesCliAdapter implements EngineAdapter {
       shell: false,
       detached: false,
     });
+    this.activeProcesses.add(proc);
 
     try {
       for await (const event of readHermesJsonStream(proc, signal)) {
         yield event;
       }
     } finally {
+      this.activeProcesses.delete(proc);
       if (!proc.killed) {
         proc.kill();
       }

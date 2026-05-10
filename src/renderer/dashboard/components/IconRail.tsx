@@ -1,4 +1,4 @@
-import { MessageSquare, CalendarClock, Sparkles, BookOpen, UserCircle, Settings, Link2, Moon, Sun } from "lucide-react";
+import { MessageSquare, CalendarClock, Sparkles, BookOpen, UserCircle, Settings, Link2, Moon, Sun, Columns3 } from "lucide-react";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
 
@@ -10,6 +10,7 @@ export function IconRail() {
   const items: Array<{ id: PanelId; label: string; icon: typeof MessageSquare }> = [
     { id: "chat", label: "聊天", icon: MessageSquare },
     { id: "tasks", label: "任务", icon: CalendarClock },
+    { id: "kanban", label: "看板", icon: Columns3 },
     { id: "skills", label: "工具", icon: Sparkles },
     { id: "memory", label: "知识库", icon: BookOpen },
     { id: "connectors", label: "链接", icon: Link2 },

@@ -55,9 +55,9 @@ export function buildRepoSyncSteps(options: {
 }
 
 /**
- * Pinned fork source: Mahiruxia/hermes-agent@codex/launch-metadata-capabilities
+ * Pinned fork source: Mahiruxia/hermes-agent@codex/forge-v0.13.0-launch-metadata
  *
- * Reason: Official NousResearch/hermes-agent v0.11.0 does NOT support:
+ * Reason: Forge needs a stable Hermes 0.13.0 build that includes:
  *   - `hermes capabilities --json`
  *   - `--launch-metadata <path>` CLI arg
  *   - `HERMES_FORGE_LAUNCH_METADATA` env var
@@ -67,13 +67,13 @@ export function buildRepoSyncSteps(options: {
  * install flows pull from this pinned source so that capability checks pass
  * uniformly.
  *
- * To upgrade: rebase the `codex/launch-metadata-capabilities` branch onto
+ * To upgrade: rebase the `codex/forge-v0.13.0-launch-metadata` branch onto
  * the latest official tag, then update this commit hash.
  */
 export const DEFAULT_PINNED_HERMES_SOURCE: InstallSource = {
   repoUrl: "https://github.com/Mahiruxia/hermes-agent.git",
-  branch: "codex/launch-metadata-capabilities",
-  commit: "0537bad534a7ce43d683f06f8ebdf7ff9dfb4816",
+  branch: "codex/forge-v0.13.0-launch-metadata",
+  commit: "92feb83d235a19ba5308e57a8963780cc492cc60",
   sourceLabel: "pinned",
 };
 

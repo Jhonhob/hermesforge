@@ -14,6 +14,7 @@ import type {
   HermesWebUiSettings,
   RuntimeConfig,
   SecretVaultStatus,
+  SessionMetaPatch,
   SetupCheck,
   SetupDependencyRepairId,
   SetupSummary,
@@ -1244,14 +1245,14 @@ function App() {
     await Promise.all([refreshHermesStatus(), refreshSetupSummary(), refreshFileTree(), refreshWorkspaceSafety(), loadConfigOverview(workspacePath), loadWebUiOverview()]);
   }
 
-  async function updateActiveSessionMeta(patch: Partial<Pick<WorkSession, "pinned" | "tags" | "status">> & { projectId?: string | null }) {
+  async function updateActiveSessionMeta(patch: SessionMetaPatch) {
     const current = useAppStore.getState();
     if (!current.activeSessionId) return;
     const session = await window.workbenchClient.updateSession({ id: current.activeSessionId, ...patch });
     store.upsertSession(session);
   }
 
-  async function updateSessionMeta(sessionId: string, patch: Partial<Pick<WorkSession, "pinned" | "tags" | "status">> & { projectId?: string | null }) {
+  async function updateSessionMeta(sessionId: string, patch: SessionMetaPatch) {
     const session = await window.workbenchClient.updateSession({ id: sessionId, ...patch });
     store.upsertSession(session);
   }
@@ -1618,7 +1619,7 @@ function sessionTitleFromPrompt(prompt: string) {
   return prompt.trim().replace(/\s+/g, " ").slice(0, 32) || "新的会话";
 }
 
-function applyTheme(theme: "green-light" | "light" | "slate" | "oled") {
+function applyTheme(theme: "green-light" | "light" | "slate" | "oled" | "default-large") {
   const resolved = theme === "oled" ? "slate" : theme;
   document.documentElement.setAttribute("data-theme", resolved);
   document.body.setAttribute("data-theme", resolved);

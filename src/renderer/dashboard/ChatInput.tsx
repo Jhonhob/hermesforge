@@ -280,8 +280,9 @@ export function ChatInput(props: {
   }
 
   function handleSubmit() {
-    if (store.userInput.trim().startsWith("/")) {
-      void dispatchSlashCommand(store.userInput.trim());
+    const trimmedInput = store.userInput.trim();
+    if (trimmedInput.startsWith("/") && !isNativeHermesSlashCommand(trimmedInput)) {
+      void dispatchSlashCommand(trimmedInput);
       return;
     }
     if (preflight.blocked) {
@@ -454,7 +455,7 @@ export function ChatInput(props: {
     const [name, ...rest] = raw.split(/\s+/);
     const arg = rest.join(" ").trim();
     if (name === "/help") {
-      store.upsertClarifyCard({ id: `help-${Date.now()}`, question: "可用命令：/help /clear /compact /model /workspace /new /usage /theme", status: "pending", createdAt: new Date().toISOString() });
+      store.upsertClarifyCard({ id: `help-${Date.now()}`, question: "可用命令：/help /goal /clear /compact /model /workspace /new /usage /theme。主题可选：green-light、light、slate、oled、default-large", status: "pending", createdAt: new Date().toISOString() });
       store.setUserInput("");
       return;
     }
@@ -476,7 +477,7 @@ export function ChatInput(props: {
       return;
     }
     if (name === "/theme") {
-      const theme = (["green-light", "light", "slate", "oled"].includes(arg) ? arg : "green-light") as "green-light" | "light" | "slate" | "oled";
+      const theme = (["green-light", "light", "slate", "oled", "default-large"].includes(arg) ? arg : "green-light") as "green-light" | "light" | "slate" | "oled" | "default-large";
       const settings = await window.workbenchClient.saveWebUiSettings({ theme });
       store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings } : {
         settings,
@@ -527,6 +528,12 @@ export function ChatInput(props: {
         store.warning("模型不存在", `未找到模型 "${arg}"。可用模型：${availableModels || "无"}`);
       }
       store.setUserInput("");
+      return;
+    }
+    if (name === "/goal") {
+      if (!arg) {
+        store.setUserInput("/goal ");
+      }
       return;
     }
     if (name === "/compact") {
@@ -1255,6 +1262,10 @@ function formatBytes(size: number) {
 
 function currentSessionPath(sessionFilesPath: string, activeSessionId?: string) {
   return sessionFilesPath || activeSessionId || "default";
+}
+
+function isNativeHermesSlashCommand(raw: string) {
+  return /^\/goal(?:\s|$)/i.test(raw);
 }
 
 function shortPath(value: string) {

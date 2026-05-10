@@ -5,10 +5,30 @@ import { cn } from "../DashboardPrimitives";
 export function CronEditor(props: { value: Partial<HermesCronJob>; onChange: (value: Partial<HermesCronJob>) => void; onCancel: () => void; onSave: () => void }) {
   const schedule = scheduleParts(props.value.schedule ?? "every 1h");
   const setSchedule = (next: string) => props.onChange({ ...props.value, schedule: next });
-  const saveDisabled = !props.value.name?.trim() || !props.value.prompt?.trim() || !props.value.schedule?.trim();
+  const isNoAgent = Boolean(props.value.noAgent);
+  const hasScript = Boolean(props.value.script?.trim() || props.value.scriptContent?.trim());
+  const saveDisabled = !props.value.name?.trim()
+    || !props.value.schedule?.trim()
+    || (isNoAgent ? !hasScript : !props.value.prompt?.trim());
 
   return (
     <section className={editorPanelClass}>
+      <div className="mb-2 grid gap-2 sm:grid-cols-2">
+        <button
+          className={cn(modeButtonClass, !isNoAgent && "bg-indigo-600 text-white ring-indigo-600")}
+          onClick={() => props.onChange({ ...props.value, noAgent: false })}
+          type="button"
+        >
+          Agent 任务
+        </button>
+        <button
+          className={cn(modeButtonClass, isNoAgent && "bg-indigo-600 text-white ring-indigo-600")}
+          onClick={() => props.onChange({ ...props.value, noAgent: true })}
+          type="button"
+        >
+          脚本看门狗
+        </button>
+      </div>
       <div className="grid gap-2 sm:grid-cols-2">
         <TextInput label="名称" value={props.value.name ?? ""} onChange={(name) => props.onChange({ ...props.value, name })} />
         <label className="grid gap-1 text-[12px] font-medium text-slate-500">
@@ -49,7 +69,31 @@ export function CronEditor(props: { value: Partial<HermesCronJob>; onChange: (va
         </label>
       )}
 
-      <textarea className={cn("mt-2 h-28", textareaClass)} placeholder="写清楚这次定时任务要让 Hermes Agent 做什么" value={props.value.prompt ?? ""} onChange={(event) => props.onChange({ ...props.value, prompt: event.target.value })} />
+      {!isNoAgent ? (
+        <textarea className={cn("mt-2 h-28", textareaClass)} placeholder="写清楚这次定时任务要让 Hermes Agent 做什么" value={props.value.prompt ?? ""} onChange={(event) => props.onChange({ ...props.value, prompt: event.target.value })} />
+      ) : (
+        <textarea className={cn("mt-2 h-20", textareaClass)} placeholder="可选：备注这个看门狗要检查什么；Hermes 不会启动 Agent" value={props.value.prompt ?? ""} onChange={(event) => props.onChange({ ...props.value, prompt: event.target.value })} />
+      )}
+
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <TextInput label={isNoAgent ? "脚本文件名" : "预运行脚本文件名"} value={props.value.script ?? ""} placeholder={isNoAgent ? "watchdog.py" : "collect_context.py"} onChange={(script) => props.onChange({ ...props.value, script })} />
+        <TextInput label="工作目录" value={props.value.workdir ?? ""} placeholder="可选，留空使用 Hermes 默认目录" onChange={(workdir) => props.onChange({ ...props.value, workdir })} />
+      </div>
+      <textarea
+        className={cn("mt-2 h-32", textareaClass)}
+        placeholder={isNoAgent ? "脚本内容必填，例如：print('FORGE_CRON_NO_AGENT_OK')" : "可选：在 Agent prompt 前运行的数据采集脚本"}
+        value={props.value.scriptContent ?? ""}
+        onChange={(event) => props.onChange({ ...props.value, scriptContent: event.target.value })}
+      />
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <TextInput label="Deliver" value={props.value.deliver ?? ""} placeholder="local, stdout, telegram..." onChange={(deliver) => props.onChange({ ...props.value, deliver })} />
+        <TextInput
+          label="Skills"
+          value={(props.value.skills ?? []).join(", ")}
+          placeholder="skill-a, skill-b"
+          onChange={(skills) => props.onChange({ ...props.value, skills: skills.split(",").map((item) => item.trim()).filter(Boolean) })}
+        />
+      </div>
       <div className="mt-2 flex items-center justify-between gap-2">
         <label className="flex items-center gap-2 text-[12px] text-slate-600">
           <input type="checkbox" checked={props.value.status !== "paused"} onChange={(event) => props.onChange({ ...props.value, status: event.target.checked ? "active" : "paused" })} />
@@ -66,6 +110,7 @@ type ScheduleMode = "interval" | "cron" | "once";
 const editorPanelClass = "rounded-lg bg-[#f9f9fa] p-4";
 const inputClass = "rounded-md bg-white px-3 py-2 text-[13px] font-normal text-slate-800 outline-none ring-1 ring-slate-100 transition-shadow focus:ring-2 focus:ring-indigo-100";
 const textareaClass = "w-full rounded-md bg-white p-3 text-[13px] outline-none ring-1 ring-slate-100 transition-shadow focus:ring-2 focus:ring-indigo-100";
+const modeButtonClass = "rounded-lg bg-white px-3 py-2 text-[12px] font-semibold text-slate-600 ring-1 ring-slate-100 transition-colors hover:bg-slate-50";
 
 function TextInput(props: { label: string; value: string; placeholder?: string; onChange: (value: string) => void }) {
   return (

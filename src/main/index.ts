@@ -406,7 +406,7 @@ app.whenReady().then(async () => {
     void shutdownPipeline.run([
       { id: "task-runner-drain", timeoutMs: 5000, run: () => taskRunner.shutdown("app-shutdown") },
       { id: "active-command-kill", timeoutMs: 3000, run: async () => killActiveCommands() },
-      { id: "hermes-stop", timeoutMs: 5000, run: () => hermes.stop("app-shutdown") },
+      { id: "hermes-stop", timeoutMs: 10000, run: () => hermes.stop("app-shutdown") },
       { id: "connector-shutdown", timeoutMs: 8000, run: () => hermesConnectorService.shutdown() },
       { id: "model-runtime-proxy-shutdown", timeoutMs: 5000, run: () => modelRuntimeProxyService.shutdown() },
     ]).then((report) => {

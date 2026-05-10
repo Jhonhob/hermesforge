@@ -109,4 +109,29 @@ describe("SessionSidebar", () => {
     expect(callbacks.onSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: "session-today" }));
     expect(callbacks.onDeleteSession).toHaveBeenCalledWith(expect.objectContaining({ id: "session-today" }));
   });
+
+  it("renames a session by double-clicking the title", () => {
+    const callbacks = renderSidebar();
+    const titleSpan = screen.getByText("今天会话");
+
+    fireEvent.doubleClick(titleSpan);
+    const input = screen.getByDisplayValue("今天会话");
+    fireEvent.change(input, { target: { value: "新的标题" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(callbacks.onUpdateSessionMeta).toHaveBeenCalledWith("session-today", { title: "新的标题" });
+  });
+
+  it("cancels rename on Escape", () => {
+    const callbacks = renderSidebar();
+    const titleSpan = screen.getByText("今天会话");
+
+    fireEvent.doubleClick(titleSpan);
+    const input = screen.getByDisplayValue("今天会话");
+    fireEvent.change(input, { target: { value: "未保存的标题" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(callbacks.onUpdateSessionMeta).not.toHaveBeenCalled();
+    expect(screen.getByText("今天会话")).toBeInTheDocument();
+  });
 });

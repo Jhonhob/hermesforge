@@ -13,7 +13,7 @@ export interface UiState {
   sessionSidebarOpen: boolean;
   sessionSidebarWidth: number;
   agentPanelWidth: number;
-  activePanel: "chat" | "tasks" | "skills" | "memory" | "connectors" | "files" | "profiles" | "settings" | "spaces" | "projects";
+  activePanel: "chat" | "tasks" | "kanban" | "skills" | "memory" | "connectors" | "files" | "profiles" | "settings" | "spaces" | "projects";
   activeProfile?: string;
   selectedProjectId?: string;
   sidebarGrouping: "smart" | "project" | "time";

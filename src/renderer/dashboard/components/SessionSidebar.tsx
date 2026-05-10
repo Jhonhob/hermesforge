@@ -1,4 +1,4 @@
-import { Copy, Download, FolderPlus, PanelLeftClose, Pin, Plus, Search, Trash2, Upload } from "lucide-react";
+import { Copy, Download, FolderPlus, PanelLeftClose, PencilLine, Pin, Plus, Search, Trash2, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { SessionMetaPatch, WorkSession } from "../../../shared/types";
 import { useAppStore } from "../../store";
@@ -37,6 +37,10 @@ export function SessionSidebar(props: {
     props.onUpdateSessionMeta(session.id, { pinned: !session.pinned });
   }
 
+  function renameSession(session: WorkSession, title: string) {
+    props.onUpdateSessionMeta(session.id, { title });
+  }
+
   return (
     <aside className="hermes-session-sidebar flex h-full min-h-0 w-full shrink-0 flex-col border-r border-slate-200/80 bg-[#fbfbfd] p-2">
       <div className="space-y-2 border-b border-slate-200/70 pb-2">
@@ -71,6 +75,7 @@ export function SessionSidebar(props: {
             onDuplicate={props.onDuplicateSession}
             onExport={(session) => props.onExportSession(session, "json")}
             onDelete={props.onDeleteSession}
+            onRename={renameSession}
             modelLabel={modelLabel}
           />
         ))}
@@ -109,6 +114,7 @@ function SessionListSection(props: {
   onDuplicate: (session: WorkSession) => void;
   onExport: (session: WorkSession) => void;
   onDelete: (session: WorkSession) => void;
+  onRename: (session: WorkSession, title: string) => void;
   modelLabel: string;
 }) {
   if (!props.sessions.length) return null;
@@ -126,6 +132,7 @@ function SessionListSection(props: {
             onDuplicate={() => props.onDuplicate(session)}
             onExport={() => props.onExport(session)}
             onDelete={() => props.onDelete(session)}
+            onRename={(title) => props.onRename(session, title)}
             modelLabel={props.modelLabel}
           />
         ))}
@@ -144,14 +151,51 @@ function SessionItem(props: {
   onDuplicate: () => void;
   onExport: () => void;
   onDelete: () => void;
+  onRename: (title: string) => void;
   modelLabel: string;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+
+  function startEdit(event: React.MouseEvent) {
+    event.stopPropagation();
+    setEditValue(props.session.title);
+    setEditing(true);
+  }
+
+  function saveEdit() {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== props.session.title) {
+      props.onRename(trimmed);
+    }
+    setEditing(false);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+  }
+
   return (
     <div className={cn("hermes-session-item group rounded-xl px-2.5 py-2 text-[12px] transition-all focus-within:bg-white", props.active ? "is-active bg-[var(--hermes-primary-soft)] text-[var(--hermes-primary)] shadow-sm ring-1 ring-[var(--hermes-primary-border)]" : "text-slate-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-slate-200/70")}>
       <div className="flex items-start gap-2">
         <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", props.active ? "bg-[var(--hermes-primary)] shadow-[0_0_10px_rgba(91,77,255,0.4)]" : props.session.pinned ? "bg-amber-400" : "bg-slate-300/70")} />
         <button className="min-w-0 flex-1 overflow-hidden text-left" onClick={props.onSelect} type="button">
-          <span className={cn("block truncate text-[12px] leading-5 text-slate-700", props.active && "font-semibold text-[var(--hermes-primary)]")}>{props.session.title}</span>
+          {editing ? (
+            <input
+              className="w-full rounded bg-white px-1 py-0.5 text-[12px] leading-5 text-slate-700 outline-none ring-1 ring-[var(--hermes-primary-border)]"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); saveEdit(); }
+                if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+              }}
+              onBlur={saveEdit}
+              onClick={(e) => e.stopPropagation()}
+              autoFocus
+            />
+          ) : (
+            <span className={cn("block truncate text-[12px] leading-5 text-slate-700", props.active && "font-semibold text-[var(--hermes-primary)]")} onDoubleClick={startEdit}>{props.session.title}</span>
+          )}
           <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-4 text-slate-400">
             <span className="min-w-0 flex-1 truncate">{sessionSubtitle(props.session, props.modelLabel)}</span>
             <span className="shrink-0">{formatSessionTime(props.session.updatedAt)}</span>
@@ -159,6 +203,7 @@ function SessionItem(props: {
         </button>
       </div>
       <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <button className={miniButtonClass} onClick={(e) => { e.stopPropagation(); startEdit(e); }} title="重命名" type="button"><PencilLine size={10} /></button>
         <button className={miniButtonClass} onClick={props.onPin} title={props.session.pinned ? "取消收藏" : "收藏"} type="button"><Pin size={10} /></button>
         <button className={miniButtonClass} onClick={props.onDuplicate} title="复制会话" type="button"><Copy size={11} /></button>
         <button className={miniButtonClass} onClick={props.onExport} title="导出" type="button"><Download size={11} /></button>

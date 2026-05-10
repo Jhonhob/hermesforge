@@ -1,6 +1,34 @@
 # Release Notes
 
-## Hermes Forge v0.2.14
+## Hermes Forge v0.2.15
+
+发布日期：2026-05-10
+
+这是一次看板中文化、会话体验增强与进程生命周期修复版本，重点补齐 Kanban 前端的中文界面与小白友好引导，同时修复用户长期反馈的 Forge 退出后 Hermes 残留、Gateway 断连后重连过慢、会话标题无法编辑等痛点。
+
+### 新增功能
+
+- **看板 (Kanban) 中文化**：完整的中文看板界面，六列状态（待分类/待处理/就绪/执行中/已阻塞/已完成）均附带小白友好的说明文字；任务卡片、搜索、筛选、负责人分配、诊断告警等全部中文化。
+- **默认大字体主题**：新增 `default-large` 主题，18px 基础字号，对大屏和高分辨率显示器更友好。
+- **顶部重启 Hermes Agent 按钮**：Header 菜单新增"重启 Hermes Agent"入口，支持显式预热 Hermes，加载新技能后无需重启 Forge。
+
+### 核心修复
+
+- **Forge 退出后 Hermes 进程残留**：`HermesCliAdapter.stop()` 之前为空实现，导致关闭 Forge 时 Windows Native Agent 子进程不会被终止。现已通过 `activeProcesses` Set 追踪所有 `spawn` 出的进程，在 `stop()` 时统一发送 `SIGTERM` 清理。
+- **Gateway 自动断连重连过慢**：首次重连等待从 5s 降至 3s，后续退避阶梯从 15s/60s/300s 收紧为 10s/30s/60s，减少"调度器未运行"的感知时间。
+- **会话标题不可编辑**：侧边栏和 Header 均支持双击/点击编辑会话标题，Enter 保存、Escape 取消、失焦自动保存；同步修复 `main.tsx` 中 `updateSessionMeta` / `updateActiveSessionMeta` 的类型签名与 `SessionMetaPatch` 不一致的问题。
+- **依赖修复 `hermes_python_dotenv` 被 IPC 拦截**：`repairSetupDependency` 的 Zod schema 漏了 `"hermes_python_dotenv"`，导致前端点击修复 python-dotenv 时直接报校验错误，无法到达修复逻辑。
+
+### 体验优化
+
+- **会话侧边栏交互增强**：hover 显示操作按钮（重命名/收藏/复制/导出/删除），收藏状态用琥珀色圆点标识，标签页切换更明确。
+- **Cron 编辑器优化**：支持 Agent 任务与脚本看门狗两种模式切换，UI 更直观。
+- **关闭 Forge 时 Hermes 停止超时**：从 5s 提升到 10s，给 Hermes 更充裕的清理时间。
+
+### 验证
+
+- `npx tsc --noEmit` 通过。
+- `npm test` 通过，314 个测试全部成功。
 
 发布日期：2026-05-05
 

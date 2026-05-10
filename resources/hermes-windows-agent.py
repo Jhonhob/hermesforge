@@ -361,6 +361,8 @@ def _ensure_git_bash_path() -> None:
     program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     for candidate in (
+        Path(local_app_data) / "hermes" / "git" / "bin" / "bash.exe",
+        Path(local_app_data) / "hermes" / "git" / "usr" / "bin" / "bash.exe",
         Path(program_files) / "Git" / "bin" / "bash.exe",
         Path(program_files) / "Git" / "usr" / "bin" / "bash.exe",
         Path(local_app_data) / "Programs" / "Git" / "bin" / "bash.exe",
