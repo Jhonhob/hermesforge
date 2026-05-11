@@ -377,7 +377,8 @@ export class NativeInstallStrategy implements InstallStrategy {
 
       await this.verifyHermesHomeWritable(hermesHome, log);
       await this.recordManagedWindowsTools(hermesHome, log);
-      await this.writeManagedMarker(rootPath);
+      const editable = await this.detectEditableInstall(rootPath, log);
+      await this.writeManagedMarker(rootPath, editable);
       const previousHermesRoot = (await this.configStore.read()).enginePaths?.hermes;
       await this.saveHermesRoot(rootPath);
 
@@ -445,6 +446,7 @@ export class NativeInstallStrategy implements InstallStrategy {
   private async officialInstallerArgs(scriptPath: string, hermesHome: string, rootPath: string) {
     const script = await fs.readFile(scriptPath, "utf8").catch(() => "");
     const supportsWithSystemPackages = /(?:param\s*\(|,)\s*\[switch\]\s*\$WithSystemPackages\b/i.test(script);
+    const supportsSkipGateway = /(?:param\s*\(|,)\s*\[switch\]\s*\$SkipGatewayStartup\b/i.test(script);
     const args = [
       "-NoProfile",
       "-ExecutionPolicy",
@@ -452,14 +454,14 @@ export class NativeInstallStrategy implements InstallStrategy {
       "-File",
       scriptPath,
       "-SkipSetup",
-      "-HermesHome",
-      hermesHome,
-      "-InstallDir",
-      rootPath,
     ];
-    if (supportsWithSystemPackages) {
-      args.splice(6, 0, "-WithSystemPackages");
+    if (supportsSkipGateway) {
+      args.push("-SkipGatewayStartup");
     }
+    if (supportsWithSystemPackages) {
+      args.push("-WithSystemPackages");
+    }
+    args.push("-HermesHome", hermesHome, "-InstallDir", rootPath);
     return args;
   }
 
@@ -527,7 +529,7 @@ export class NativeInstallStrategy implements InstallStrategy {
     };
     addCandidate(path.join(rootPath, "venv", "Scripts", "python.exe"), undefined, "venv Python");
     addCandidate(path.join(rootPath, ".venv", "Scripts", "python.exe"), undefined, ".venv Python");
-    addCandidate(probe?.commands.python.command, probe?.commands.python.args, probe?.commands.python.label ?? "RuntimeProbe Python");
+    addCandidate(probe?.commands?.python?.command, probe?.commands?.python?.args, probe?.commands?.python?.label ?? "RuntimeProbe Python");
     let lastResult: Awaited<ReturnType<typeof runCommand>> | undefined;
     let lastCommand = "";
     for (const candidate of candidates) {
@@ -876,18 +878,17 @@ export class NativeInstallStrategy implements InstallStrategy {
     const cliPath = await resolveHermesCliPath(rootPath) ?? defaultHermesCliPath(rootPath);
     if (!(await this.exists(cliPath))) return { available: false, message: `未找到 Hermes CLI：${cliPath}` };
     const hermesHome = await resolveActiveHermesHome(this.appPaths.hermesDir());
-    const candidates: Array<{ command: string; args: string[] }> = isHermesCliExecutable(cliPath)
-      ? [{ command: cliPath, args: ["--version"] }]
-      : [
-          ...(preferredPython ? [{ command: preferredPython.command, args: [...preferredPython.argsPrefix, cliPath, "--version"] }] : []),
-          { command: path.join(rootPath, "venv", "Scripts", "python.exe"), args: [cliPath, "--version"] },
-          { command: path.join(rootPath, ".venv", "Scripts", "python.exe"), args: [cliPath, "--version"] },
-          { command: path.join(rootPath, "venv", "bin", "python"), args: [cliPath, "--version"] },
-          { command: path.join(rootPath, ".venv", "bin", "python"), args: [cliPath, "--version"] },
-          { command: "python", args: [cliPath, "--version"] },
-          { command: "python3", args: [cliPath, "--version"] },
-          { command: "py", args: ["-3", cliPath, "--version"] },
-        ];
+    const candidates: Array<{ command: string; args: string[] }> = [
+      ...(isHermesCliExecutable(cliPath) ? [{ command: cliPath, args: ["--version"] as string[] }] : []),
+      ...(preferredPython ? [{ command: preferredPython.command, args: [...preferredPython.argsPrefix, cliPath, "--version"] }] : []),
+      { command: path.join(rootPath, "venv", "Scripts", "python.exe"), args: [cliPath, "--version"] },
+      { command: path.join(rootPath, ".venv", "Scripts", "python.exe"), args: [cliPath, "--version"] },
+      { command: path.join(rootPath, "venv", "bin", "python"), args: [cliPath, "--version"] },
+      { command: path.join(rootPath, ".venv", "bin", "python"), args: [cliPath, "--version"] },
+      { command: "python", args: [cliPath, "--version"] },
+      { command: "python3", args: [cliPath, "--version"] },
+      { command: "py", args: ["-3", cliPath, "--version"] },
+    ];
     let lastMessage = "未找到可用 Python 解释器。";
     for (const candidate of candidates) {
       if (path.isAbsolute(candidate.command) && !(await this.exists(candidate.command))) continue;
@@ -941,7 +942,29 @@ export class NativeInstallStrategy implements InstallStrategy {
     return { available: false, message: lastMessage };
   }
 
-  private async writeManagedMarker(rootPath: string) {
+  private async detectEditableInstall(rootPath: string, log: string[]): Promise<boolean> {
+    const candidates = [
+      path.join(rootPath, "venv", "Scripts", "python.exe"),
+      path.join(rootPath, ".venv", "Scripts", "python.exe"),
+    ];
+    for (const python of candidates) {
+      if (!(await this.exists(python))) continue;
+      const result = await runCommand(python, ["-c", "import importlib.util; spec = importlib.util.find_spec('hermes'); print(spec.origin if spec else '')"], {
+        cwd: rootPath,
+        timeoutMs: 10_000,
+      }).catch(() => undefined);
+      if (result?.exitCode === 0) {
+        const origin = result.stdout.trim();
+        const isEditable = origin.toLowerCase().startsWith(rootPath.toLowerCase());
+        log.push(`Editable install check via ${python}: hermes at ${origin}, editable=${isEditable}`);
+        return isEditable;
+      }
+    }
+    log.push("Editable install check: no venv Python available to probe.");
+    return false;
+  }
+
+  private async writeManagedMarker(rootPath: string, editable: boolean) {
     const markerPath = path.join(rootPath, ".zhenghebao-managed-install.json");
     await fs.writeFile(markerPath, JSON.stringify({
       source: "zhenghebao",
@@ -949,6 +972,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       repoUrl: OFFICIAL_HERMES_REPO_URL,
       branch: "main",
       sourceLabel: "official",
+      editable,
       installedAt: new Date().toISOString(),
     }, null, 2), "utf8");
   }
@@ -1087,16 +1111,10 @@ export class NativeInstallStrategy implements InstallStrategy {
 
   private async patchOfficialInstallerScript(scriptPath: string, log: string[]) {
     const raw = await fs.readFile(scriptPath, "utf8");
-    const withoutBom = raw.replace(/^\uFEFF/, "");
-    const replacement = '    Write-Info "Hermes Forge 跳过安装器自动启动 Gateway；请在桌面端连接器页面启动。"';
-    const patched = withoutBom.replace(/^[ \t]*Start-GatewayIfConfigured\s*$/m, replacement);
-    if (patched === withoutBom) {
-      log.push("Official installer patch: Start-GatewayIfConfigured was not found; preserving downloaded script.");
-    } else {
-      log.push("Official installer patch: disabled interactive Gateway startup prompt.");
-    }
-    await fs.writeFile(scriptPath, `\uFEFF${patched}`, "utf8");
-    log.push("Official installer patch: wrote UTF-8 BOM for Windows PowerShell 5.1 compatibility.");
+    const withoutBom = raw.replace(/^﻿/, "");
+    // 不再替换 Start-GatewayIfConfigured，保持官方脚本原样。Forge 通过 hermes gateway run --replace 接管。
+    await fs.writeFile(scriptPath, `﻿${withoutBom}`, "utf8");
+    log.push("Official installer: preserved original script with UTF-8 BOM for Windows PowerShell 5.1 compatibility.");
   }
 
   private samePath(left: string, right: string) {

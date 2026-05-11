@@ -217,14 +217,38 @@ export class HermesCliAdapter implements EngineAdapter {
     }
 
     const launch = await this.launchSpec(runtime, rootPath, [cliPath, "--version"], rootPath);
-    const result = await runCommand(launch.command, launch.args, {
+    const cleanEnv = launch.env ? { ...launch.env } : undefined;
+    if (cleanEnv) {
+      // 设为空字符串以覆盖 process.env 中的同名变量（runCommand 用 { ...process.env, ...options.env } 合并）
+      cleanEnv.PYTHONPATH = "";
+      cleanEnv.CI = "";
+      cleanEnv.TERM = "";
+      cleanEnv.PROMPT_TOOLKIT_NO_CPR = "";
+      cleanEnv.PROMPT_TOOLKIT_COLOR_DEPTH = "";
+    }
+    const cleanResult = await runCommand(launch.command, launch.args, {
       cwd: launch.cwd,
       timeoutMs: 20000,
-      env: launch.env,
+      env: cleanEnv,
       detached: launch.detached,
     });
-    const versionOutput = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    const versionLooksValid = result.exitCode === 0 && versionOutput.length > 0;
+    const cleanVersionOutput = [cleanResult.stdout, cleanResult.stderr].filter(Boolean).join("\n").trim();
+    const cleanLooksValid = cleanResult.exitCode === 0 && cleanVersionOutput.length > 0;
+
+    let result = cleanResult;
+    let versionOutput = cleanVersionOutput;
+    let versionLooksValid = cleanLooksValid;
+    if (!versionLooksValid) {
+      result = await runCommand(launch.command, launch.args, {
+        cwd: launch.cwd,
+        timeoutMs: 20000,
+        env: launch.env,
+        detached: launch.detached,
+      });
+      versionOutput = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      versionLooksValid = result.exitCode === 0 && versionOutput.length > 0;
+    }
+
     const failure = versionOutput
       || `命令 ${launch.command} ${launch.args.join(" ")} 退出码 ${result.exitCode ?? "unknown"}`;
     return {
@@ -790,12 +814,6 @@ export class HermesCliAdapter implements EngineAdapter {
       source,
     ];
 
-    const removedCliFlags = new Set(["--memory", "--user"]);
-    const unsupported = args.find((arg) => removedCliFlags.has(arg));
-    if (unsupported) {
-      throw new Error(`Hermes CLI 参数生成异常：检测到已废弃参数 ${unsupported}。请重新构建客户端。`);
-    }
-
     return {
       args,
       permissionMode: cliPermissionStrategy.mode,
@@ -992,7 +1010,7 @@ export class HermesCliAdapter implements EngineAdapter {
 
   private resolveCliPermissionStrategy(runtime: HermesRuntimeConfig): HermesCliPermissionStrategy {
     const configured = this.normalizeCliPermissionMode(runtime.cliPermissionMode);
-    const mode = configured ?? "yolo";
+    const mode = configured ?? "guarded";
     if (mode === "yolo") {
       return {
         mode,
@@ -1093,7 +1111,7 @@ export class HermesCliAdapter implements EngineAdapter {
       input.supportsLaunchMetadataEnv ? undefined : "supportsLaunchMetadataEnv",
       input.supportsResume ? undefined : "supportsResume",
     ].filter((item): item is string => Boolean(item));
-    const minimumSatisfied = missing.length === 0;
+    const minimumSatisfied = missing.length === 0 || (Boolean(input.cliVersion) && input.supportsResume);
     let support: HermesCliCapabilitySupport;
     let transport: HermesCliMetadataTransport;
     if (minimumSatisfied) {
@@ -1615,18 +1633,59 @@ export class HermesCliAdapter implements EngineAdapter {
     return path.join(this.appPaths.baseDir(), "tmp", "hermes-launch-metadata");
   }
 
+  private editableInstallCache = new Map<string, boolean>();
+
+  private async isEditableInstall(rootPath: string): Promise<boolean> {
+    const cached = this.editableInstallCache.get(rootPath);
+    if (cached !== undefined) return cached;
+
+    const markerPath = path.join(rootPath, ".zhenghebao-managed-install.json");
+    try {
+      const raw = await fs.readFile(markerPath, "utf8");
+      const marker = JSON.parse(raw) as { editable?: boolean };
+      if (typeof marker.editable === "boolean") {
+        this.editableInstallCache.set(rootPath, marker.editable);
+        return marker.editable;
+      }
+    } catch {
+      // marker missing or invalid
+    }
+
+    const sitePackagesDirs = [
+      path.join(rootPath, "venv", "Lib", "site-packages"),
+      path.join(rootPath, ".venv", "Lib", "site-packages"),
+    ];
+    for (const dir of sitePackagesDirs) {
+      try {
+        const entries = await fs.readdir(dir);
+        if (entries.some((e) => e.startsWith("__editable__") && e.endsWith(".pth"))) {
+          this.editableInstallCache.set(rootPath, true);
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    this.editableInstallCache.set(rootPath, false);
+    return false;
+  }
+
   private async hermesEnv(rootPath: string, runtime: HermesRuntimeConfig, request?: EngineRunRequest): Promise<NodeJS.ProcessEnv> {
     const hermesHome = await this.activeHermesHome();
     const runtimeEnv = request?.runtimeEnv;
     const normalizedSourceType = this.normalizedRuntimeSourceType(runtimeEnv);
     const normalizedModel = this.normalizedRuntimeModel(runtimeEnv);
+    const editable = await this.isEditableInstall(rootPath);
     const env = {
       PYTHONUTF8: "1",
       PYTHONIOENCODING: "utf-8",
       PYTHONUNBUFFERED: "1",
-      PYTHONPATH: runtime.mode === "wsl"
-        ? [rootPath, process.env.PYTHONPATH ? toWslPath(process.env.PYTHONPATH) : ""].filter(Boolean).join(":")
-        : `${rootPath}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
+      ...(editable ? {} : {
+        PYTHONPATH: runtime.mode === "wsl"
+          ? [rootPath, process.env.PYTHONPATH ? toWslPath(process.env.PYTHONPATH) : ""].filter(Boolean).join(":")
+          : `${rootPath}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
+      }),
       NO_COLOR: "1",
       FORCE_COLOR: "0",
       TERM: runtime.mode === "wsl" ? process.env.TERM ?? "xterm-256color" : "dumb",
@@ -1725,11 +1784,24 @@ export class HermesCliAdapter implements EngineAdapter {
     return this.runtimeAdapterFactory?.(runtime);
   }
 
+  private windowsPythonSpecCache?: { rootPath: string; spec: { command: string; argsPrefix: string[]; label: string } };
+
   private async windowsPythonSpec(rootPath: string, cliPath: string, env: NodeJS.ProcessEnv) {
-    return await this.detectWindowsPython(rootPath, cliPath, env);
+    if (this.windowsPythonSpecCache?.rootPath === rootPath) {
+      return this.windowsPythonSpecCache.spec;
+    }
+    const spec = await this.detectWindowsPython(rootPath, cliPath, env);
+    if (!spec.lastError) {
+      this.windowsPythonSpecCache = { rootPath, spec: { command: spec.command, argsPrefix: spec.argsPrefix, label: spec.label } };
+    }
+    return spec;
   }
 
-  private async detectWindowsPython(rootPath: string, _cliPath: string, env: NodeJS.ProcessEnv) {
+  private async detectWindowsPython(
+    rootPath: string,
+    _cliPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<{ command: string; argsPrefix: string[]; label: string; lastError?: string }> {
     const candidates: Array<{ command: string; argsPrefix: string[]; label: string }> = [
       { command: path.join(rootPath, ".venv", "Scripts", "python.exe"), argsPrefix: [], label: ".venv Python" },
       { command: path.join(rootPath, "venv", "Scripts", "python.exe"), argsPrefix: [], label: "venv Python" },
@@ -1755,11 +1827,11 @@ export class HermesCliAdapter implements EngineAdapter {
       });
       const output = `${result.stdout}\n${result.stderr}`;
       if (result.exitCode === 0 && /Hermes Agent Python ok/i.test(output)) {
-        return candidate;
+        return { ...candidate, lastError: undefined };
       }
       lastError = `${candidate.label} failed to import run_agent.AIAgent from ${rootPath}: ${output.trim() || `exit ${result.exitCode ?? "unknown"}`}`;
     }
-    return { command: "python", argsPrefix: [], lastError };
+    return { command: "python", argsPrefix: [], label: "python fallback", lastError };
   }
 
   private async hermesRuntime(): Promise<HermesRuntimeConfig> {

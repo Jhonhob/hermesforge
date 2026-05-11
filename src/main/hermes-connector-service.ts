@@ -783,7 +783,7 @@ export class HermesConnectorService {
           rootPath: runtime.adapter.toRuntimePath(root),
           pythonArgs: [runtime.adapter.toRuntimePath(scriptPath)],
           cwd: root,
-          env: { ...process.env, ...PYTHON_ENV, PYTHONPATH: runtime.adapter.toRuntimePath(root) },
+          env: { ...process.env, ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}) },
         })
         : await this.legacyPythonLaunch(root, [scriptPath]);
     } catch (error) {
@@ -887,7 +887,7 @@ export class HermesConnectorService {
           rootPath: runtime.adapter.toRuntimePath(root),
           pythonArgs: ["-m", "pip", "install", "aiohttp"],
           cwd: root,
-          env: { ...PYTHON_ENV, PYTHONPATH: runtime.adapter.toRuntimePath(root) },
+          env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}) },
         })
         : await this.legacyPythonLaunch(root, ["-m", "pip", "install", "aiohttp"], python!.command, python!.args);
     } catch (error) {
@@ -1082,7 +1082,7 @@ export class HermesConnectorService {
       {
         cwd: root,
         timeoutMs: 10000,
-        env: { ...PYTHON_ENV, PYTHONPATH: root },
+        env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
         commandId: "connector.weixin.preflight-dependencies.legacy",
         runtimeKind: "windows",
       },
@@ -1423,7 +1423,7 @@ export class HermesConnectorService {
       rootPath: runtimeRoot,
       pythonArgs: [cliPath, "--version"],
       cwd: runtime.root,
-      env: { ...PYTHON_ENV, PYTHONPATH: runtimeRoot, HERMES_HOME: runtimeHermesHome },
+      env: { ...PYTHON_ENV, ...(await this.isEditableInstall(runtime.root) ? { PYTHONPATH: runtimeRoot } : {}), HERMES_HOME: runtimeHermesHome },
     });
     const result = await runCommand(launch.command, launch.args, {
       cwd: launch.cwd,
@@ -1454,7 +1454,7 @@ export class HermesConnectorService {
       rootPath: runtimeRoot,
       pythonArgs: [cliPath, "gateway", "run", "--replace"],
       cwd: runtime.root,
-      env: buildGatewayEnv(process.env, hermesEnv, runtimeRoot, runtimeHermesHome),
+      env: buildGatewayEnv(process.env, hermesEnv, runtimeRoot, runtimeHermesHome, await this.isEditableInstall(runtime.root)),
     });
     return {
       command: launch.command,
@@ -1472,7 +1472,7 @@ export class HermesConnectorService {
       command: python.command,
       args: [...python.args, this.hermesCliPath(root), "gateway", "run", "--replace"],
       cwd: root,
-      env: buildGatewayEnv(process.env, hermesEnv, root, await this.activeHermesHome()),
+      env: buildGatewayEnv(process.env, hermesEnv, root, await this.activeHermesHome(), await this.isEditableInstall(root)),
       label: `${python.label} (legacy fallback: ${reason})`,
     };
   }
@@ -1484,7 +1484,7 @@ export class HermesConnectorService {
       command: python.command,
       args: [...python.args, ...pythonArgs],
       cwd: root,
-      env: { ...process.env, ...PYTHON_ENV, PYTHONPATH: root },
+      env: { ...process.env, ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
       label: `${python.label} legacy`,
     };
   }
@@ -1517,7 +1517,7 @@ export class HermesConnectorService {
       rootPath: runtimeRoot,
       pythonArgs: ["-c", script],
       cwd: root,
-      env: { ...PYTHON_ENV, PYTHONPATH: runtimeRoot },
+      env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtimeRoot } : {}) },
     });
     const result = await runCommand(launch.command, launch.args, {
       cwd: launch.cwd,
@@ -1590,7 +1590,7 @@ export class HermesConnectorService {
       const result = await runCommand(candidate.command, [...candidate.args, this.hermesCliPath(root), "--version"], {
         cwd: root,
         timeoutMs: 5000,
-        env: { ...PYTHON_ENV, PYTHONPATH: root },
+        env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
       });
       if (result.exitCode === 0 && /Hermes Agent/i.test(`${result.stdout}\n${result.stderr}`)) {
         return candidate;
@@ -1605,6 +1605,44 @@ export class HermesConnectorService {
     ].filter(Boolean).join(" "));
   }
 
+  private editableInstallCache = new Map<string, boolean>();
+
+  private async isEditableInstall(rootPath: string): Promise<boolean> {
+    const cached = this.editableInstallCache.get(rootPath);
+    if (cached !== undefined) return cached;
+
+    const markerPath = path.join(rootPath, ".zhenghebao-managed-install.json");
+    try {
+      const raw = await fs.readFile(markerPath, "utf8");
+      const marker = JSON.parse(raw) as { editable?: boolean };
+      if (typeof marker.editable === "boolean") {
+        this.editableInstallCache.set(rootPath, marker.editable);
+        return marker.editable;
+      }
+    } catch {
+      // marker missing or invalid
+    }
+
+    const sitePackagesDirs = [
+      path.join(rootPath, "venv", "Lib", "site-packages"),
+      path.join(rootPath, ".venv", "Lib", "site-packages"),
+    ];
+    for (const dir of sitePackagesDirs) {
+      try {
+        const entries = await fs.readdir(dir);
+        if (entries.some((e) => e.startsWith("__editable__") && e.endsWith(".pth"))) {
+          this.editableInstallCache.set(rootPath, true);
+          return true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    this.editableInstallCache.set(rootPath, false);
+    return false;
+  }
+
   private async gatewayCliStatus() {
     const root = await this.resolveHermesRoot();
     const runtime = await this.runtimeContext(root);
@@ -1616,7 +1654,7 @@ export class HermesConnectorService {
         cwd: root,
         env: {
           ...PYTHON_ENV,
-          PYTHONPATH: runtime.adapter.toRuntimePath(root),
+          ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}),
           HERMES_HOME: runtime.adapter.toRuntimePath(await this.activeHermesHome()),
         },
       })
@@ -1815,7 +1853,7 @@ function unquoteEnv(value: string) {
   return value;
 }
 
-function buildGatewayEnv(baseEnv: NodeJS.ProcessEnv, hermesEnv: Record<string, string>, runtimeRoot?: string, hermesHome?: string): NodeJS.ProcessEnv {
+function buildGatewayEnv(baseEnv: NodeJS.ProcessEnv, hermesEnv: Record<string, string>, runtimeRoot?: string, hermesHome?: string, editable?: boolean): NodeJS.ProcessEnv {
   const pythonPath = [runtimeRoot, baseEnv.PYTHONPATH].filter((value): value is string => Boolean(value?.trim())).join(path.delimiter);
   return {
     ...baseEnv,
@@ -1824,7 +1862,7 @@ function buildGatewayEnv(baseEnv: NodeJS.ProcessEnv, hermesEnv: Record<string, s
     PYTHONUNBUFFERED: "1",
     NO_COLOR: "1",
     FORCE_COLOR: "0",
-    ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+    ...(editable && pythonPath ? { PYTHONPATH: pythonPath } : {}),
     ...(hermesHome ? { HERMES_HOME: hermesHome } : {}),
   };
 }

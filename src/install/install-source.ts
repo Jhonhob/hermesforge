@@ -55,26 +55,16 @@ export function buildRepoSyncSteps(options: {
 }
 
 /**
- * Pinned fork source: Mahiruxia/hermes-agent@codex/forge-v0.13.0-launch-metadata
+ * Official Hermes source: NousResearch/hermes-agent@main
  *
- * Reason: Forge needs a stable Hermes 0.13.0 build that includes:
- *   - `hermes capabilities --json`
- *   - `--launch-metadata <path>` CLI arg
- *   - `HERMES_FORGE_LAUNCH_METADATA` env var
- *
- * These capabilities are required for Forge integration (workspace context,
- * selected files, attachments, session resume). Both Windows native and WSL
- * install flows pull from this pinned source so that capability checks pass
- * uniformly.
- *
- * To upgrade: rebase the `codex/forge-v0.13.0-launch-metadata` branch onto
- * the latest official tag, then update this commit hash.
+ * Forge aligns with the official Hermes Agent repository to ensure
+ * compatibility with upstream releases. Install flows track the official
+ * main branch so users receive the latest stable Hermes features.
  */
 export const DEFAULT_PINNED_HERMES_SOURCE: InstallSource = {
-  repoUrl: "https://github.com/Mahiruxia/hermes-agent.git",
-  branch: "codex/forge-v0.13.0-launch-metadata",
-  commit: "92feb83d235a19ba5308e57a8963780cc492cc60",
-  sourceLabel: "pinned",
+  repoUrl: "https://github.com/NousResearch/hermes-agent.git",
+  branch: "main",
+  sourceLabel: "official",
 };
 
 /**

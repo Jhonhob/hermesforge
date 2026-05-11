@@ -300,8 +300,8 @@ describe("HermesCliAdapter WSL permission mode", () => {
       "test",
     );
 
-    expect(invocation.permissionMode).toBe("yolo");
-    expect(invocation.args).toContain("--yolo");
+    expect(invocation.permissionMode).toBe("guarded");
+    expect(invocation.args).not.toContain("--yolo");
   });
 
   it("passes --yolo only when the runtime config explicitly selects yolo", async () => {
@@ -609,6 +609,7 @@ describe("HermesCliAdapter Windows launch", () => {
       ): Promise<NodeJS.ProcessEnv>;
     };
     adapter.activeHermesHome = async () => "C:\\Users\\example\\Hermes Agent";
+    adapter.editableInstallCache = new Map();
 
     const env = await adapter.hermesEnv(
       "C:\\Users\\example\\Hermes Agent",
@@ -647,6 +648,7 @@ describe("HermesCliAdapter Windows launch", () => {
       ): Promise<NodeJS.ProcessEnv>;
     };
     adapter.activeHermesHome = async () => "C:\\Users\\example\\Hermes Agent";
+    adapter.editableInstallCache = new Map();
     const runtimeEnv = {
       provider: "custom",
       sourceType: "openai_compatible",

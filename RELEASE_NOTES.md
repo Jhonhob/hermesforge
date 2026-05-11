@@ -1,5 +1,33 @@
 # Release Notes
 
+## Hermes Forge v0.2.16
+
+发布日期：2026-05-11
+
+这是一次安装稳定性、性能优化与 Gateway 兼容性修复版本，重点解决 Windows exe 安装场景下的 PYTHONPATH 冲突导致的启动失败问题，以及每次消息触发多次 Python 探测的性能瓶颈。同时统一默认安装源为官方 Hermes Agent 仓库，并为 Gateway 状态检测与启动增加 editable install 感知能力。
+
+### 核心修复
+
+- **PYTHONPATH 冲突导致安装检测失败**：Windows Native exe 安装模式下， unconditionally 注入 `PYTHONPATH` 会导致 `hermes.exe` 运行时触发 Python 模块导入冲突，进而使版本检测返回非零退出码。已在 `hermesEnv()`、`detectLaunch()`、`buildGatewayEnv()` 等所有相关位置改为 **仅在 editable install 时注入 PYTHONPATH**，exe 安装不再受影响。
+- **Gateway 启动与状态检测同样受 PYTHONPATH 影响**：`preflightGatewayRuntime()`、`gatewayCliStatus()`、`gatewayLaunchFromRuntime()`、`legacyGatewayLaunch()` 以及微信扫码/依赖安装路径均已同步改为条件注入，确保有连接器的 exe 用户也能正常启动 Gateway。
+- **TypeScript 编译错误修复**：`detectWindowsPython` 返回的 union type 中 success/failure 分支结构不一致，导致 `spec.lastError` 访问报错。已通过统一返回类型签名修复。
+
+### 性能优化
+
+- **Python 探测缓存**：`windowsPythonSpec()` 新增 per-rootPath 缓存，首次成功探测后复用结果，避免每次用户消息触发最多 4 次 Python 子进程探测（每次 20s 超时），显著降低回复延迟。
+
+### 体验调整
+
+- **默认安装源改为官方仓库**：`DEFAULT_PINNED_HERMES_SOURCE` 从 `Mahiruxia/hermes-agent` fork 切换为 `NousResearch/hermes-agent` 官方 main 分支，确保用户安装的是上游官方版本。
+- **默认 CLI 权限模式收紧**：`cliPermissionMode` 默认值从 `"yolo"` 改为 `"guarded"`，`permissionPolicy` 默认改为 `"bridge_guarded"`，提升开箱即用的安全性。
+- **Windows Python 路径增强**：`platform-resolver.ts` 新增 Anaconda / Miniconda 安装路径检测，覆盖更多用户的 Python 环境。
+
+### 验证
+
+- `npm run check` 通过
+- `npm run build` 通过
+- `npm test -- --run`：45 个文件，314 个测试全部通过
+
 ## Hermes Forge v0.2.15
 
 发布日期：2026-05-10
