@@ -1,5 +1,25 @@
 # Release Notes
 
+## Hermes Forge v0.2.17
+
+发布日期：2026-05-11
+
+这是一次桌面端启动回归修复版本，重点解决 v0.2.16 用户反馈的“打开直接白屏”问题，并收紧打包产物与外部链接处理。
+
+### 核心修复
+
+- **修复打包后白屏风险**：渲染进程不再直接导入 Electron `webUtils`，拖拽附件获取文件路径改为通过 preload 暴露的 `workbenchClient.getPathForFile()`，避免 Electron/Node 模块进入 Vite renderer bundle。
+- **清理旧构建资源**：Vite 构建恢复清理 `dist/renderer`，避免旧 hash JS/CSS 被 `electron-builder` 一起打进安装包。
+- **外部链接安全处理**：Electron 主窗口统一拦截新窗口打开，HTTP/HTTPS/mailto 链接交给系统浏览器，其他不可信新窗口直接阻止。
+- **版本元数据校准**：同步更新 package 与 lockfile 版本，确保安装包、release 与自动更新元数据一致。
+
+### 验证
+
+- `npm run check` 通过
+- `npm run build` 通过
+- `npm test` 通过，45 个测试文件、314 个测试全部成功
+- 构建版 Electron 启动烟测通过，`#root` 正常渲染且 `workbenchClient` 正常注入
+
 ## Hermes Forge v0.2.16
 
 发布日期：2026-05-11
