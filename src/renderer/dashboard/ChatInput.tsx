@@ -431,7 +431,7 @@ export function ChatInput(props: {
     event.stopPropagation();
     setIsDraggingAttachment(false);
     const filePaths = Array.from(event.dataTransfer.files)
-      .map((file) => file.path)
+      .map((file) => window.workbenchClient.getPathForFile(file))
       .filter((filePath): filePath is string => Boolean(filePath));
     void importDroppedAttachments(filePaths);
   }

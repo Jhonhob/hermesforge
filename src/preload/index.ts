@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   ClientInfo,
   DiagnosticExportResult,
@@ -219,6 +219,7 @@ const IpcChannels = {
 const api = {
   pickWorkspaceFolder: () => ipcRenderer.invoke(IpcChannels.pickWorkspaceFolder) as Promise<string | null>,
   pickHermesInstallFolder: () => ipcRenderer.invoke(IpcChannels.pickHermesInstallFolder) as Promise<string | null>,
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   pickSessionAttachments: (sessionFilesPath: string) =>
     ipcRenderer.invoke(IpcChannels.pickSessionAttachments, sessionFilesPath) as Promise<SessionAttachment[]>,
   importSessionAttachments: (sessionFilesPath: string, filePaths: string[]) =>

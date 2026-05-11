@@ -113,6 +113,7 @@ declare global {
     workbenchClient: {
       pickWorkspaceFolder(): Promise<string | null>;
       pickHermesInstallFolder(): Promise<string | null>;
+      getPathForFile(file: File): string;
       pickSessionAttachments(sessionFilesPath: string): Promise<SessionAttachment[]>;
       importSessionAttachments(sessionFilesPath: string, filePaths: string[]): Promise<SessionAttachment[]>;
       importClipboardImageAttachment(sessionFilesPath: string): Promise<SessionAttachment[]>;
