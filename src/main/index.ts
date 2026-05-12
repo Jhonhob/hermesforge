@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, shell } from "electron";
 import path from "node:path";
 import { IpcChannels } from "../shared/ipc";
 import { AppPaths } from "./app-paths";
@@ -228,6 +228,14 @@ app.whenReady().then(async () => {
       callback(false);
     });
 
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      if (openExternalUrl(url)) {
+        return { action: "deny" };
+      }
+      console.warn("[Hermes Forge] Blocked untrusted window open:", url);
+      return { action: "deny" };
+    });
+
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
     if (devServerUrl) {
       void mainWindow.loadURL(devServerUrl);
@@ -295,6 +303,7 @@ app.whenReady().then(async () => {
       resolveHermesRoot,
     }),
     () => resolveActiveHermesHome(appPaths.hermesDir()),
+    () => appPaths.hermesDir(),
   );
 
   registerIpcHandlers(mainWindow, {
@@ -406,7 +415,7 @@ app.whenReady().then(async () => {
     void shutdownPipeline.run([
       { id: "task-runner-drain", timeoutMs: 5000, run: () => taskRunner.shutdown("app-shutdown") },
       { id: "active-command-kill", timeoutMs: 3000, run: async () => killActiveCommands() },
-      { id: "hermes-stop", timeoutMs: 5000, run: () => hermes.stop("app-shutdown") },
+      { id: "hermes-stop", timeoutMs: 10000, run: () => hermes.stop("app-shutdown") },
       { id: "connector-shutdown", timeoutMs: 8000, run: () => hermesConnectorService.shutdown() },
       { id: "model-runtime-proxy-shutdown", timeoutMs: 5000, run: () => modelRuntimeProxyService.shutdown() },
     ]).then((report) => {
@@ -437,6 +446,23 @@ function isTrustedAppUrl(value: string) {
     if (url.protocol === "file:") return true;
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
     return devServerUrl ? url.origin === new URL(devServerUrl).origin : false;
+  } catch {
+    return false;
+  }
+}
+
+function openExternalUrl(value: string) {
+  if (!isSafeExternalUrl(value)) return false;
+  shell.openExternal(value).catch((error) => {
+    console.warn("[Hermes Forge] Failed to open external URL:", error);
+  });
+  return true;
+}
+
+function isSafeExternalUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:";
   } catch {
     return false;
   }

@@ -7,6 +7,7 @@ import { OneClickDiagnosticsOrchestrator } from "./one-click-diagnostics-orchest
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -139,6 +140,97 @@ describe("OneClickDiagnosticsOrchestrator", () => {
     expect(items.find((entry) => entry.id === "model.connection")).toMatchObject({
       status: "fail",
       summary: "默认模型真实连接失败：401 Unauthorized",
+    });
+  });
+
+  it("warns when install source is the community mirror", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "one-click-source-"));
+    tempDirs.push(dir);
+    vi.spyOn(os, "homedir").mockReturnValue(dir);
+    const managedHome = path.join(dir, "forge-home");
+    await fs.mkdir(managedHome, { recursive: true });
+    await fs.symlink(managedHome, path.join(dir, ".hermes"), "junction");
+    const orchestrator = new OneClickDiagnosticsOrchestrator(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      () => managedHome,
+      () => managedHome,
+    );
+    const items: Array<{ id: string; status: string; summary?: string }> = [];
+
+    await (orchestrator as any).checkInstallSourceAndHome(items, {
+      config: {},
+      runtime: {
+        mode: "windows",
+        pythonCommand: "python",
+        windowsAgentMode: "hermes_native",
+        installSource: {
+          sourceLabel: "mirror",
+          repoUrl: "https://github.com/NousResearch/hermes-agent.git",
+          branch: "main",
+        },
+      },
+    });
+
+    expect(items.find((entry) => entry.id === "hermes.install-source")).toMatchObject({
+      status: "warn",
+      summary: "安装来源为中文社区/国内镜像，非 Nous 官方源。",
+    });
+    expect(items.find((entry) => entry.id === "hermes.home-link")).toMatchObject({
+      status: "pass",
+    });
+  });
+
+  it("warns instead of modifying when the original Hermes home exists independently", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "one-click-home-"));
+    tempDirs.push(dir);
+    vi.spyOn(os, "homedir").mockReturnValue(dir);
+    await fs.mkdir(path.join(dir, ".hermes"), { recursive: true });
+    const managedHome = path.join(dir, "forge-home");
+    await fs.mkdir(managedHome, { recursive: true });
+    const orchestrator = new OneClickDiagnosticsOrchestrator(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined,
+      undefined,
+      () => managedHome,
+      () => managedHome,
+    );
+    const items: Array<{ id: string; status: string; summary?: string }> = [];
+
+    await (orchestrator as any).checkInstallSourceAndHome(items, {
+      config: {},
+      runtime: {
+        mode: "windows",
+        pythonCommand: "python",
+        windowsAgentMode: "hermes_native",
+        installSource: {
+          sourceLabel: "official",
+          repoUrl: "https://github.com/NousResearch/hermes-agent.git",
+          branch: "main",
+        },
+      },
+    });
+
+    expect(items.find((entry) => entry.id === "hermes.home-link")).toMatchObject({
+      status: "warn",
+      summary: "检测到原版 Hermes 默认 home 独立存在；Forge 不会覆盖它，原版 CLI 与 Forge 配置可能分离。",
     });
   });
 });

@@ -104,6 +104,124 @@ describe("HermesWebUiService", () => {
     );
   });
 
+  it("parses Kanban board/task/diagnostic JSON from Hermes CLI", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    vi.mocked(runCommand)
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify([{ slug: "forge", name: "Forge", is_current: true, counts: { todo: 1 } }]),
+        stderr: "",
+        diagnostics: { exitCode: 0 } as any,
+      })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify([{ id: "task-1", title: "Wire UI", status: "todo" }]),
+        stderr: "",
+        diagnostics: { exitCode: 0 } as any,
+      })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify([{ task_id: "task-1", title: "Wire UI", diagnostics: [] }]),
+        stderr: "",
+        diagnostics: { exitCode: 0 } as any,
+      });
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+
+    await expect(service.listKanbanBoards()).resolves.toMatchObject([{ slug: "forge", name: "Forge", counts: { todo: 1 } }]);
+    await expect(service.listKanbanTasks({ board: "forge" })).resolves.toMatchObject([{ id: "task-1", title: "Wire UI", status: "todo" }]);
+    await expect(service.listKanbanDiagnostics({ board: "forge" })).resolves.toMatchObject([{ task_id: "task-1" }]);
+  });
+
+  it("surfaces Kanban CLI failures and bad JSON with stdout and stderr", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+    vi.mocked(runCommand).mockResolvedValueOnce({
+      exitCode: 2,
+      stdout: "",
+      stderr: "kanban failed",
+      diagnostics: { exitCode: 2 } as any,
+    });
+
+    await expect(service.listKanbanBoards()).rejects.toThrow("kanban failed");
+
+    vi.mocked(runCommand).mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: "not-json",
+      stderr: "warning",
+      diagnostics: { exitCode: 0 } as any,
+    });
+
+    await expect(service.listKanbanBoards()).rejects.toThrow("stdout: not-json");
+  });
+
+  it("creates no_agent cron jobs with safe script files", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    vi.mocked(runCommand).mockResolvedValue({
+      exitCode: 0,
+      stdout: "Created job: abc123\n",
+      stderr: "",
+      diagnostics: { exitCode: 0 } as any,
+    });
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+
+    await service.saveCronJob({
+      name: "Watchdog",
+      schedule: "every 1h",
+      noAgent: true,
+      script: "watchdog.py",
+      scriptContent: "print('FORGE_CRON_NO_AGENT_OK')",
+      status: "active",
+    });
+
+    expect(runCommand).toHaveBeenCalledWith(
+      "python",
+      [
+        path.join(tempRoot, "Hermes Agent", "venv", "Scripts", "hermes.exe"),
+        "cron", "create", "--name", "Watchdog", "--script", "watchdog.py", "--no-agent", "every 1h",
+      ],
+      expect.objectContaining({ commandId: "webui.hermes" }),
+    );
+    await expect(fs.readFile(path.join(appPaths.hermesDir(), "scripts", "watchdog.py"), "utf8")).resolves.toContain("FORGE_CRON_NO_AGENT_OK");
+  });
+
+  it("allows agent cron jobs to use scripts without no_agent", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    vi.mocked(runCommand).mockResolvedValue({
+      exitCode: 0,
+      stdout: "Created job: abc123\n",
+      stderr: "",
+      diagnostics: { exitCode: 0 } as any,
+    });
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+
+    await service.saveCronJob({
+      name: "Agent with script",
+      schedule: "every 1h",
+      prompt: "Summarize",
+      script: "collect.py",
+      scriptContent: "print('context')",
+      status: "active",
+    });
+
+    const args = vi.mocked(runCommand).mock.calls[0][1];
+    expect(args).toContain("--script");
+    expect(args).not.toContain("--no-agent");
+  });
+
+  it("rejects unsafe cron script paths and empty script content", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+
+    await expect(service.saveCronJob({ name: "Bad", schedule: "every 1h", noAgent: true, script: "../bad.py", scriptContent: "print(1)" })).rejects.toThrow("路径穿越");
+    await expect(service.saveCronJob({ name: "Bad", schedule: "every 1h", noAgent: true, script: "C:/bad.py", scriptContent: "print(1)" })).rejects.toThrow("绝对路径");
+    await expect(service.saveCronJob({ name: "Bad", schedule: "every 1h", noAgent: true, script: "bad.py", scriptContent: "" })).rejects.toThrow("脚本内容不能为空");
+  });
+
   it("edits cron jobs through the native Hermes CLI argument shape", async () => {
     const appPaths = new AppPaths(tempRoot);
     await appPaths.ensureBaseLayout();

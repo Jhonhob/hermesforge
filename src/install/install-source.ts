@@ -1,6 +1,6 @@
 import type { RuntimeConfig } from "../shared/types";
 
-export type InstallSourceLabel = "official" | "fork" | "pinned";
+export type InstallSourceLabel = "official" | "mirror" | "custom" | "fork" | "pinned";
 
 export interface InstallSource {
   repoUrl: string;
@@ -8,6 +8,10 @@ export interface InstallSource {
   commit?: string;
   sourceLabel: InstallSourceLabel;
 }
+
+export type InstallSourceOption =
+  | { kind: "official" | "mirror"; repoUrl?: string; branch?: string; commit?: string }
+  | { kind: "custom"; repoUrl?: string; branch?: string; commit?: string };
 
 export interface RepoSyncStep {
   program: string;
@@ -55,26 +59,16 @@ export function buildRepoSyncSteps(options: {
 }
 
 /**
- * Pinned fork source: Mahiruxia/hermes-agent@codex/launch-metadata-capabilities
+ * Official Hermes source: NousResearch/hermes-agent@main
  *
- * Reason: Official NousResearch/hermes-agent v0.11.0 does NOT support:
- *   - `hermes capabilities --json`
- *   - `--launch-metadata <path>` CLI arg
- *   - `HERMES_FORGE_LAUNCH_METADATA` env var
- *
- * These capabilities are required for Forge integration (workspace context,
- * selected files, attachments, session resume). Both Windows native and WSL
- * install flows pull from this pinned source so that capability checks pass
- * uniformly.
- *
- * To upgrade: rebase the `codex/launch-metadata-capabilities` branch onto
- * the latest official tag, then update this commit hash.
+ * Forge aligns with the official Hermes Agent repository to ensure
+ * compatibility with upstream releases. Install flows track the official
+ * main branch so users receive the latest stable Hermes features.
  */
 export const DEFAULT_PINNED_HERMES_SOURCE: InstallSource = {
-  repoUrl: "https://github.com/Mahiruxia/hermes-agent.git",
-  branch: "codex/launch-metadata-capabilities",
-  commit: "0537bad534a7ce43d683f06f8ebdf7ff9dfb4816",
-  sourceLabel: "pinned",
+  repoUrl: "https://github.com/NousResearch/hermes-agent.git",
+  branch: "main",
+  sourceLabel: "official",
 };
 
 /**
@@ -93,15 +87,41 @@ export function resolveInstallSource(config: RuntimeConfig): InstallSource {
       repoUrl: configured.repoUrl.trim(),
       branch: configured.branch?.trim() || undefined,
       commit: configured.commit?.trim() || undefined,
-      sourceLabel: configured.sourceLabel ?? "fork",
+      sourceLabel: normalizeSourceLabel(configured.sourceLabel),
     };
   }
   const envOverride = process.env.HERMES_INSTALL_REPO_URL?.trim();
   if (envOverride) {
     return {
       repoUrl: envOverride,
-      sourceLabel: "fork",
+      sourceLabel: "custom",
     };
   }
   return DEFAULT_PINNED_HERMES_SOURCE;
+}
+
+export function resolveInstallSourceFromOption(config: RuntimeConfig, option?: InstallSourceOption): InstallSource {
+  if (!option) return resolveInstallSource(config);
+  if (option.kind === "official" || option.kind === "mirror") {
+    return {
+      ...DEFAULT_PINNED_HERMES_SOURCE,
+      branch: option.branch?.trim() || DEFAULT_PINNED_HERMES_SOURCE.branch,
+      commit: option.commit?.trim() || undefined,
+      sourceLabel: option.kind,
+    };
+  }
+  const repoUrl = option.repoUrl?.trim();
+  if (!repoUrl) return resolveInstallSource(config);
+  return {
+    repoUrl,
+    branch: option.branch?.trim() || undefined,
+    commit: option.commit?.trim() || undefined,
+    sourceLabel: "custom",
+  };
+}
+
+export function normalizeSourceLabel(label?: string): InstallSourceLabel {
+  if (label === "official" || label === "mirror" || label === "custom" || label === "pinned") return label;
+  if (label === "fork") return "custom";
+  return "custom";
 }

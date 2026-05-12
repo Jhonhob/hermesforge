@@ -13,7 +13,7 @@
 export const RESUME_SUPPORT_VERSION = "0.11.0";
 
 /** Minimum Hermes version that Forge targets for full capability support. */
-export const MINIMUM_HERMES_VERSION = "0.12.0";
+export const MINIMUM_HERMES_VERSION = "0.13.0";
 
 /** Version displayed when the CLI cannot be reached. */
 export const UNKNOWN_HERMES_VERSION = "unknown";

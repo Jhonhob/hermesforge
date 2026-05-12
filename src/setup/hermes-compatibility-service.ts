@@ -96,6 +96,19 @@ export class HermesCompatibilityService {
 
   private async detectLaunch(rootPath: string, cliPath: string, config: RuntimeConfig) {
     if (isWindowsHermesExecutable(cliPath)) {
+      const fullEnv = await this.hermesEnv(rootPath);
+      const cleanEnv = { ...fullEnv };
+      cleanEnv.PYTHONPATH = "";
+      const cleanResult = await runCommand(cliPath, ["--version"], {
+        cwd: rootPath,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+        env: cleanEnv,
+        commandId: "hermes.compat.detect-version-clean",
+        runtimeKind: "windows",
+      }).catch((error) => ({ exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) } as CommandResult));
+      if (cleanResult.exitCode === 0 && outputText(cleanResult).trim()) {
+        return { mode: "venv-exe" as const, versionResult: { ...cleanResult, command: `${cliPath} --version` } };
+      }
       const versionResult = await this.runHermes(rootPath, cliPath, ["--version"], { mode: "venv-exe" as const });
       return { mode: "venv-exe" as const, versionResult };
     }

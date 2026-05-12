@@ -145,6 +145,16 @@ export function getWindowsPythonInstallCandidates(platform: PlatformKind = getPl
     }
   }
 
+  // Anaconda / Miniconda
+  if (process.env.USERPROFILE) {
+    add(path.join(process.env.USERPROFILE, "anaconda3", "python.exe"));
+    add(path.join(process.env.USERPROFILE, "miniconda3", "python.exe"));
+  }
+  if (process.env.ProgramData) {
+    add(path.join(process.env.ProgramData, "anaconda3", "python.exe"));
+    add(path.join(process.env.ProgramData, "miniconda3", "python.exe"));
+  }
+
   return candidates;
 }
 

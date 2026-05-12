@@ -180,6 +180,7 @@ describe("HermesConnectorService helpers", () => {
       },
       "D:\\Hermes Agent",
       "D:\\Forge\\.hermes\\profiles\\wechat",
+      true,
     );
 
     expect(env.OPENAI_API_KEY).toBe("pwd");

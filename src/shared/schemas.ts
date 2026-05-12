@@ -173,7 +173,7 @@ export const hermesRuntimeSchema = z.object({
     repoUrl: z.string().trim().url(),
     branch: z.string().trim().max(200).optional(),
     commit: z.string().trim().regex(/^[0-9a-fA-F]{7,40}$/).optional(),
-    sourceLabel: z.enum(["official", "fork", "pinned"]).default("official"),
+    sourceLabel: z.enum(["official", "mirror", "custom", "fork", "pinned"]).default("official"),
   }).optional(),
 });
 

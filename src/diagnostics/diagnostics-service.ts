@@ -116,6 +116,7 @@ export class DiagnosticsService {
   }
 
   private runtimeConfigSummary(config: Awaited<ReturnType<RuntimeConfigStore["read"]>>) {
+    const installSourceLabel = normalizeInstallSourceLabel(config.hermesRuntime?.installSource?.sourceLabel);
     return {
       defaultModelProfileId: config.defaultModelProfileId,
       modelProfileCount: config.modelProfiles.length,
@@ -125,6 +126,8 @@ export class DiagnosticsService {
       cliPermissionMode: config.hermesRuntime?.cliPermissionMode ?? "yolo",
       windowsAgentMode: config.hermesRuntime?.windowsAgentMode ?? "hermes_native",
       hermesInstallSource: config.hermesRuntime?.installSource,
+      hermesInstallSourceLabel: installSourceLabel,
+      hermesInstallSourceTrust: installSourceLabel === "official" ? "official" : installSourceLabel === "mirror" ? "community-mirror" : "custom",
     };
   }
 
@@ -162,4 +165,10 @@ export class DiagnosticsService {
 async function quarantineInvalidJson(filePath: string) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   await fs.rename(filePath, `${filePath}.invalid.${timestamp}`).catch(() => undefined);
+}
+
+function normalizeInstallSourceLabel(label: unknown): "official" | "mirror" | "custom" | "pinned" {
+  if (label === "official" || label === "mirror" || label === "pinned") return label;
+  if (label === "custom" || label === "fork") return "custom";
+  return "official";
 }

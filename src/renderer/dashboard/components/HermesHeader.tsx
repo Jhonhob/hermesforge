@@ -25,6 +25,7 @@ export function HermesHeader(props: {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateEvent | undefined>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [restartingHermes, setRestartingHermes] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const activeSession = store.sessions.find((session) => session.id === store.activeSessionId);
 
@@ -97,6 +98,24 @@ export function HermesHeader(props: {
     }
   }
 
+  async function restartHermes() {
+    if (restartingHermes || !window.workbenchClient || typeof window.workbenchClient.warmHermes !== "function") return;
+    setRestartingHermes(true);
+    try {
+      const result = await window.workbenchClient.warmHermes();
+      const feedback = useAppStore.getState();
+      if (result.ok) {
+        feedback.success("Hermes 已重启", result.message || "Agent 已重新预热，新技能将生效。");
+      } else {
+        feedback.error("重启失败", result.message || "无法重启 Hermes Agent。");
+      }
+    } catch (error) {
+      useAppStore.getState().error("重启失败", error instanceof Error ? error.message : "未知错误");
+    } finally {
+      setRestartingHermes(false);
+    }
+  }
+
   const updateBusy = checkingUpdate || clientUpdate?.status === "checking" || clientUpdate?.status === "downloading";
   const updatePercent = clientUpdate?.status === "downloading" && typeof clientUpdate.percent === "number"
     ? Math.max(0, Math.min(100, Math.round(clientUpdate.percent)))
@@ -158,6 +177,15 @@ export function HermesHeader(props: {
       },
     },
     { divider: true },
+    {
+      icon: RefreshCw,
+      label: restartingHermes ? "正在重启 Hermes..." : "重启 Hermes Agent",
+      action: () => {
+        void restartHermes();
+        setShowMenu(false);
+        setConfirmingDelete(false);
+      },
+    },
     {
       icon: Trash2,
       label: "删除当前会话",

@@ -4,6 +4,9 @@ import { Sparkles, CheckCircle2, AlertCircle, Loader2, ArrowRight, Settings, Hel
 import { useAppStore } from "../store";
 import type { HermesInstallEvent, SetupCheck, SetupDependencyRepairId } from "../../shared/types";
 
+const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent";
+const OFFICIAL_HERMES_DOCS_URL = "https://hermes-agent.nousresearch.com/";
+
 export function WelcomePage(props: { onComplete: () => void }) {
   const store = useAppStore();
   const [status, setStatus] = useState<"detecting" | "found" | "not-found" | "installing">("detecting");
@@ -95,16 +98,16 @@ export function WelcomePage(props: { onComplete: () => void }) {
   }, [props, status, store]);
 
   function applyInstallEvent(event: HermesInstallEvent) {
-    const isRunning = event.stage !== "completed" && event.stage !== "failed";
+    const isRunning = event.stage !== "completed" && event.stage !== "failed" && event.stage !== "cancelled";
     installRunningRef.current = isRunning;
-    setStatus(event.stage === "completed" ? "found" : event.stage === "failed" ? "not-found" : "installing");
+    setStatus(event.stage === "completed" ? "found" : event.stage === "failed" || event.stage === "cancelled" ? "not-found" : "installing");
     setProgress(Math.max(0, Math.min(100, event.progress)));
     setMessage(event.message);
     setDetail(event.detail ?? "");
     if (isRunning && !installStartTime) {
       setInstallStartTime(Date.now());
     }
-    if (event.stage === "completed" || event.stage === "failed") {
+    if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
       setInstallStartTime(null);
       void refreshSetupChecks();
     }
@@ -186,13 +189,14 @@ export function WelcomePage(props: { onComplete: () => void }) {
     }
   }
 
-  function handleCancelInstall() {
+  async function handleCancelInstall() {
+    const result = await window.workbenchClient.cancelInstallHermes();
     installRunningRef.current = false;
     setInstallStartTime(null);
     setStatus("not-found");
     setProgress(0);
-    setMessage("安装已取消");
-    setDetail("你可以点击「重新自动安装」重试，或点击下方链接前往官网手动下载安装包。");
+    setMessage(result.ok ? "正在取消安装" : "取消安装");
+    setDetail(result.ok ? result.message : "当前没有可取消的安装进程。你可以重新自动安装，或查看官方文档手动配置路径。");
   }
 
   function handleManualConfig() {
@@ -284,12 +288,12 @@ export function WelcomePage(props: { onComplete: () => void }) {
                 ) : null}
 
                 <a
-                  href={macRuntime ? "https://hermesagent.org.cn/" : "https://hermesagent.org.cn/docs/getting-started/windows-installation"}
+                  href={macRuntime ? OFFICIAL_HERMES_DOCS_URL : OFFICIAL_HERMES_REPO_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50"
                 >
-                  <BookOpen size={16} /> {macRuntime ? "查看 Hermes 官网" : "查看手动安装教程"}
+                  <BookOpen size={16} /> {macRuntime ? "查看 Hermes 官方文档" : "查看官方 GitHub"}
                 </a>
 
                 <button
@@ -337,25 +341,25 @@ export function WelcomePage(props: { onComplete: () => void }) {
                 <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-left">
                   <p className="text-[11px] font-medium text-amber-800">为什么卡在 55%？</p>
                   <p className="mt-1 text-[11px] leading-4 text-amber-700">
-                    此阶段是 Hermes 官方 PowerShell 安装脚本在后台下载依赖包。如果网络较慢或企业防火墙限制了 PowerShell 脚本执行，可能会长时间停留在此处。你可以继续等待，也可以取消后前往官网手动下载安装包。
+                    此阶段是 Hermes PowerShell 安装脚本在后台下载依赖包。如果网络较慢或企业防火墙限制了 PowerShell 脚本执行，可能会长时间停留。可以继续等待，也可以取消后在设置中心切换国内社区镜像重试。
                   </p>
                 </div>
               ) : null}
               <div className="mt-4 flex flex-col gap-2">
                 <button
                   className="mx-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
-                  onClick={handleCancelInstall}
+                  onClick={() => void handleCancelInstall()}
                   type="button"
                 >
                   <X size={14} /> 取消安装
                 </button>
                 <a
-                  href="https://hermesagent.org.cn/"
+                  href={OFFICIAL_HERMES_DOCS_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center justify-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 hover:underline"
                 >
-                  <ExternalLink size={12} /> 前往 Hermes 官网下载安装包
+                  <ExternalLink size={12} /> 查看 Nous 官方文档
                 </a>
               </div>
             </div>
@@ -443,7 +447,7 @@ function welcomeSetupFixLabel(id: SetupDependencyRepairId) {
 function installStageLabel(progress: number) {
   if (progress <= 12) return "环境预检";
   if (progress <= 32) return "下载安装脚本";
-  if (progress <= 62) return "执行官方安装脚本";
+  if (progress <= 62) return "执行安装脚本";
   if (progress <= 82) return "健康检查";
   return "完成";
 }
@@ -466,8 +470,8 @@ function ManualInstallGuide(props: { defaultOpen?: boolean }) {
       {open ? (
         <div className="space-y-4 px-4 pb-4">
           <Step number={1} title="在 PowerShell 中安装 Hermes Agent">
-            <p className="text-xs text-slate-600">Windows Native 是 Hermes Forge 的默认路径。推荐优先使用本页的一键安装；手动安装时请使用 Hermes 官方 Windows 脚本。</p>
-            <CodeBlock>{`irm https://res1.hermesagent.org.cn/install.ps1 | iex`}</CodeBlock>
+            <p className="text-xs text-slate-600">Windows Native 是 Hermes Forge 的默认路径。推荐优先使用本页的一键安装；手动安装时请优先参考 Nous 官方文档。国内社区镜像仅作为网络受限时的替代来源。</p>
+            <CodeBlock>{`irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 | iex`}</CodeBlock>
           </Step>
 
           <Step number={2} title="确认 hermes 命令可用">
@@ -483,15 +487,16 @@ hermes setup`}</CodeBlock>
           </Step>
 
           <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
-            更详细的图文教程请参考
+            官方文档请参考
             <a
-              href="https://hermesagent.org.cn/docs/getting-started/windows-installation"
+              href={OFFICIAL_HERMES_DOCS_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="ml-1 font-semibold underline hover:text-indigo-800"
             >
-              Windows 安装指南
+              Nous Hermes Agent
             </a>
+            <span className="ml-1">；GitHub 访问慢时可在设置中心手动选择中文社区镜像。</span>
           </div>
         </div>
       ) : null}
