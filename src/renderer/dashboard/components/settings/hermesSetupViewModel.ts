@@ -104,7 +104,7 @@ export function buildHermesSetupViewModel(input: {
     }] : []),
   ];
 
-  if (input.installEvent && input.installEvent.stage !== "completed" && input.installEvent.stage !== "failed") {
+  if (input.installEvent && input.installEvent.stage !== "completed" && input.installEvent.stage !== "failed" && input.installEvent.stage !== "cancelled") {
     return {
       state: "installing",
       tone: "neutral",

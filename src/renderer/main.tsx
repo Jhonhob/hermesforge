@@ -86,7 +86,31 @@ function defaultHermesRuntime(): HermesRuntimeConfig {
     cliPermissionMode: "yolo",
     permissionPolicy: "bridge_guarded",
     workerMode: "off",
+    installSource: {
+      repoUrl: "https://github.com/NousResearch/hermes-agent.git",
+      branch: "main",
+      sourceLabel: "official",
+    },
   };
+}
+
+function hermesInstallOptions(rootPath: string, runtime: HermesRuntimeConfig) {
+  const source = runtime.installSource;
+  const kind = source?.sourceLabel === "mirror"
+    ? "mirror"
+    : source?.sourceLabel === "custom" || source?.sourceLabel === "fork"
+      ? "custom"
+      : "official";
+  const options: Parameters<Window["workbenchClient"]["installHermes"]>[0] = {
+    ...(rootPath.trim() ? { rootPath: rootPath.trim() } : {}),
+    source: {
+      kind,
+      repoUrl: source?.repoUrl,
+      branch: source?.branch,
+      commit: source?.commit,
+    },
+  };
+  return options;
 }
 
 function SettingsView(props: {
@@ -149,7 +173,7 @@ function SettingsView(props: {
     if (!window.workbenchClient || typeof window.workbenchClient.onInstallHermesEvent !== "function") return;
     return window.workbenchClient.onInstallHermesEvent((event) => {
       setInstallEvent(event);
-      if (event.stage === "completed" || event.stage === "failed") {
+      if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
         setSetupActionRunning(undefined);
       }
     });
@@ -223,7 +247,7 @@ function SettingsView(props: {
     setSetupActionRunning("hermes");
     setInstallEvent(undefined);
     try {
-      const result = await window.workbenchClient.installHermes(rootPath.trim() ? { rootPath: rootPath.trim() } : undefined);
+      const result = await window.workbenchClient.installHermes(hermesInstallOptions(rootPath, runtime));
       if (result.rootPath) setRootPath(result.rootPath);
       await props.onRefresh();
       showSaveNotice(result.message);
@@ -319,7 +343,7 @@ function SettingsView(props: {
       setSetupActionRunning(check.id);
       setInstallEvent(undefined);
       try {
-        const result = await window.workbenchClient.installHermes(rootPath.trim() ? { rootPath: rootPath.trim() } : undefined);
+        const result = await window.workbenchClient.installHermes(hermesInstallOptions(rootPath, runtime));
         if (result.rootPath) setRootPath(result.rootPath);
         await props.onRefresh();
         showSaveNotice(result.message);

@@ -168,6 +168,7 @@ const IpcChannels = {
   clientUpdateEvent: "updates:client-event",
   updateHermes: "updates:hermes",
   installHermes: "setup:install-hermes",
+  cancelInstallHermes: "setup:cancel-install-hermes",
   installHermesEvent: "setup:install-hermes:event",
   repairSetupDependency: "setup:repair-dependency",
   getRuntimeConfig: "config:get-runtime",
@@ -381,7 +382,9 @@ const api = {
     return () => ipcRenderer.removeListener(IpcChannels.clientUpdateEvent, wrapped);
   },
   updateHermes: () => ipcRenderer.invoke(IpcChannels.updateHermes) as Promise<EngineMaintenanceResult>,
-  installHermes: (options?: { rootPath?: string }) => ipcRenderer.invoke(IpcChannels.installHermes, options) as Promise<HermesInstallResult>,
+  installHermes: (options?: { rootPath?: string; source?: { kind: "official" | "mirror" | "custom"; repoUrl?: string; branch?: string; commit?: string } }) =>
+    ipcRenderer.invoke(IpcChannels.installHermes, options) as Promise<HermesInstallResult>,
+  cancelInstallHermes: () => ipcRenderer.invoke(IpcChannels.cancelInstallHermes) as Promise<{ ok: boolean; message: string }>,
   repairSetupDependency: (id: SetupDependencyRepairId) =>
     ipcRenderer.invoke(IpcChannels.repairSetupDependency, id) as Promise<SetupDependencyRepairResult>,
   onInstallHermesEvent: (callback: (event: HermesInstallEvent) => void) => {

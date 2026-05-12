@@ -18,7 +18,7 @@ export type EnginePermissionPolicy = {
 export type WindowsAgentMode = "hermes_native" | "host_tool_loop" | "disabled";
 export type HermesCliPermissionMode = "yolo" | "safe" | "guarded";
 export type HermesPermissionPolicyMode = "passthrough" | "bridge_guarded" | "restricted_workspace";
-export type HermesSourceLabel = "official" | "fork" | "pinned";
+export type HermesSourceLabel = "official" | "mirror" | "custom" | "fork" | "pinned";
 
 export type HermesInstallSourceConfig = {
   repoUrl: string;
@@ -1615,11 +1615,15 @@ export type HermesInstallResult = EngineMaintenanceResult & {
 
 export type HermesInstallStage =
   | "preflight"
+  | "downloading_script"
   | "repairing_dependencies"
   | "recovering"
   | "cloning"
+  | "running_installer"
   | "installing_dependencies"
   | "health_check"
+  | "cancelling"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -1630,6 +1634,12 @@ export type HermesInstallEvent = {
   progress: number;
   startedAt: string;
   at: string;
+  sourceLabel?: HermesSourceLabel;
+  sourceUrl?: string;
+  elapsedSeconds?: number;
+  logLine?: string;
+  diagnosticCode?: string;
+  logPath?: string;
 };
 
 export type EngineProbeMetric = {

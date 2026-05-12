@@ -303,6 +303,7 @@ app.whenReady().then(async () => {
       resolveHermesRoot,
     }),
     () => resolveActiveHermesHome(appPaths.hermesDir()),
+    () => appPaths.hermesDir(),
   );
 
   registerIpcHandlers(mainWindow, {

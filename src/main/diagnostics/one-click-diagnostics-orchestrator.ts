@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { defaultOfficialHermesHome } from "../hermes-home";
 import type { RuntimeConfigStore } from "../runtime-config";
 import type { SetupService } from "../../setup/setup-service";
 import type { RuntimeProbeService } from "../../runtime/runtime-probe-service";
@@ -33,6 +34,18 @@ type RuntimeContext = {
   runtime: NonNullable<RuntimeConfig["hermesRuntime"]>;
 };
 
+type ManagedInstallMarker = {
+  source?: string;
+  installer?: string;
+  repoUrl?: string;
+  branch?: string;
+  commit?: string;
+  installedCommit?: string;
+  sourceLabel?: string;
+  editable?: boolean;
+  installedAt?: string;
+};
+
 const STALE_LOCK_MIN_AGE_MS = 5000;
 
 export class OneClickDiagnosticsOrchestrator {
@@ -53,6 +66,7 @@ export class OneClickDiagnosticsOrchestrator {
     private readonly hermesCompatibilityService?: HermesCompatibilityService,
     private readonly testModelConnection?: (config: RuntimeConfig) => Promise<ModelConnectionTestResult>,
     private readonly hermesHomeProvider?: () => Promise<string> | string,
+    private readonly managedHermesHomeProvider?: () => Promise<string> | string,
   ) {}
 
   getStatus(): OneClickDiagnosticsStatus {
@@ -82,12 +96,18 @@ export class OneClickDiagnosticsOrchestrator {
 
       context = await this.readRuntimeContext(items);
       if (context) {
+        await this.capture(items, "hermes.install-source", "Hermes 安装来源", "runtime-config", async () => {
+          await this.checkInstallSourceAndHome(items, context!);
+        });
         await this.capture(items, "runtime.windows", "Windows Native 运行环境", "runtime-probe-service", async () => {
           await this.checkWindowsRuntime(items, context!, options);
         });
         resolvedCli = await this.captureValue(items, "hermes.path", "Hermes 路径检查", "hermes-cli-resolver", async () =>
           this.checkHermesPath(items, context!, options),
         );
+        await this.capture(items, "hermes.toolchain", "Hermes Windows 工具链", "one-click-diagnostics-orchestrator", async () => {
+          await this.checkWindowsToolchain(items, resolvedCli?.rootPath ?? await this.configStore.getEnginePath("hermes"));
+        });
         await this.capture(items, "python.deps", "Python 依赖检查", "hermes-cli-resolver", async () => {
           await this.checkPythonDeps(items, context!, resolvedCli, options);
         });
@@ -222,6 +242,163 @@ export class OneClickDiagnosticsOrchestrator {
       }));
       return undefined;
     }
+  }
+
+  private async checkInstallSourceAndHome(items: OneClickDiagnosticItem[], context: RuntimeContext) {
+    this.setStage("hermes.source", "正在检查 Hermes 安装来源和 home 隔离状态...");
+    const source = context.runtime.installSource;
+    const label = normalizeInstallSourceLabel(source?.sourceLabel);
+    const repoUrl = source?.repoUrl || "https://github.com/NousResearch/hermes-agent.git";
+    const ref = source?.commit || source?.branch || "main";
+    const sourceMeta = installSourceDiagnostic(label, repoUrl, ref);
+    const rootPath = typeof this.configStore.getEnginePath === "function"
+      ? await this.configStore.getEnginePath("hermes").catch(() => undefined)
+      : undefined;
+    const marker = rootPath ? await readManagedInstallMarker(rootPath) : undefined;
+
+    items.push(item({
+      id: "hermes.install-source",
+      title: "Hermes 安装来源",
+      status: sourceMeta.status,
+      severity: sourceMeta.severity,
+      summary: sourceMeta.summary,
+      details: sourceMeta.details,
+      evidence: { sourceLabel: label, repoUrl, ref, configuredSource: source, installRoot: rootPath, marker },
+      autoFixable: false,
+      userActionRequired: sourceMeta.userActionRequired,
+      suggestedActions: sourceMeta.suggestedActions,
+      source: "runtime-config",
+    }));
+
+    items.push(installMarkerDiagnostic(rootPath, marker));
+
+    const officialHome = defaultOfficialHermesHome();
+    const managedHome = await resolveOptionalPath(this.managedHermesHomeProvider);
+    const activeHermesHome = await resolveOptionalPath(this.hermesHomeProvider);
+    const officialStat = await fs.lstat(officialHome).catch(() => undefined);
+    if (!officialStat) {
+      items.push(item({
+        id: "hermes.home-link",
+        title: "Hermes home 与原版 CLI",
+        status: "warn",
+        severity: "warning",
+        summary: "未检测到原版 Hermes 默认 home；Forge 会继续使用托管 home，但独立 hermes CLI 可能看不到 Forge 配置。",
+        evidence: { officialHome, managedHome, activeHermesHome, linkState: "missing" },
+        autoFixable: false,
+        userActionRequired: false,
+        suggestedActions: ["重启客户端会再次尝试把原版 Hermes home 安全链接到 Forge 托管 home；不要手动覆盖含密钥目录。"],
+        source: "hermes-home",
+      }));
+      return;
+    }
+
+    if (officialStat.isSymbolicLink()) {
+      const target = await fs.realpath(officialHome).catch(() => undefined);
+      const realManagedHome = managedHome ? await fs.realpath(managedHome).catch(() => managedHome) : undefined;
+      const pointsToForge = Boolean(target && realManagedHome && samePath(target, realManagedHome));
+      items.push(item({
+        id: "hermes.home-link",
+        title: "Hermes home 与原版 CLI",
+        status: pointsToForge || !realManagedHome ? "pass" : "warn",
+        severity: pointsToForge || !realManagedHome ? "info" : "warning",
+        summary: pointsToForge
+          ? "原版 Hermes 默认 home 已安全链接到 Forge 托管 home，配置可共享。"
+          : "原版 Hermes 默认 home 是链接，但没有指向当前 Forge 托管 home。",
+        evidence: { officialHome, managedHome, activeHermesHome, linkTarget: target, linkState: pointsToForge ? "forge_link" : "external_link" },
+        autoFixable: false,
+        userActionRequired: !pointsToForge && Boolean(realManagedHome),
+        suggestedActions: pointsToForge ? [] : ["检查原版 Hermes home 的链接目标；如需共享配置，请通过迁移/导入流程处理，避免直接覆盖。"],
+        source: "hermes-home",
+      }));
+      return;
+    }
+
+    if (officialStat.isDirectory()) {
+      const realOfficialHome = await fs.realpath(officialHome).catch(() => officialHome);
+      const realManagedHome = managedHome ? await fs.realpath(managedHome).catch(() => managedHome) : undefined;
+      const sameAsManaged = Boolean(realManagedHome && samePath(realOfficialHome, realManagedHome));
+      items.push(item({
+        id: "hermes.home-link",
+        title: "Hermes home 与原版 CLI",
+        status: sameAsManaged ? "pass" : "warn",
+        severity: sameAsManaged ? "info" : "warning",
+        summary: sameAsManaged
+          ? "原版 Hermes 默认 home 与 Forge 托管 home 指向同一目录。"
+          : "检测到原版 Hermes 默认 home 独立存在；Forge 不会覆盖它，原版 CLI 与 Forge 配置可能分离。",
+        evidence: { officialHome, managedHome, activeHermesHome, linkState: sameAsManaged ? "same_directory" : "independent_directory" },
+        autoFixable: false,
+        userActionRequired: false,
+        suggestedActions: sameAsManaged ? [] : ["这是安全隔离状态，不会破坏原版 Hermes；如需合并配置，请先备份并使用迁移/导入流程。"],
+        source: "hermes-home",
+      }));
+      return;
+    }
+
+    items.push(item({
+      id: "hermes.home-link",
+      title: "Hermes home 与原版 CLI",
+      status: "fail",
+      severity: "error",
+      summary: "原版 Hermes 默认 home 已存在但不是目录或链接，可能影响原版 CLI 与 Forge 配置共享。",
+      evidence: { officialHome, managedHome, activeHermesHome, linkState: "unexpected_file" },
+      autoFixable: false,
+      userActionRequired: true,
+      suggestedActions: ["检查该路径内容并备份后手动处理；不要让 Forge 自动覆盖含密钥或记忆的文件。"],
+      source: "hermes-home",
+    }));
+  }
+
+  private async checkWindowsToolchain(items: OneClickDiagnosticItem[], rootPath: string) {
+    this.setStage("hermes.toolchain", "正在检查 Hermes Windows 工具链...");
+    const hermesHome = path.dirname(rootPath);
+    const gitBashCandidates = [
+      process.env.HERMES_GIT_BASH_PATH,
+      path.join(hermesHome, "git", "bin", "bash.exe"),
+      path.join(hermesHome, "git", "usr", "bin", "bash.exe"),
+    ].filter((value): value is string => Boolean(value?.trim()));
+    const managedNode = path.join(hermesHome, "node", "node.exe");
+
+    const [gitBash, node, uv, rg, ffmpeg] = await Promise.all([
+      firstExistingPath(gitBashCandidates),
+      this.probeCommandChain([{ command: managedNode, args: ["--version"], label: "Hermes-managed Node.js" }, { command: "node", args: ["--version"], label: "Node.js" }]),
+      this.probeCommandChain([{ command: "uv", args: ["--version"], label: "uv" }]),
+      this.probeCommandChain([{ command: "rg", args: ["--version"], label: "ripgrep" }]),
+      this.probeCommandChain([{ command: "ffmpeg", args: ["-version"], label: "ffmpeg" }]),
+    ]);
+    const missing = [
+      gitBash ? undefined : "Git Bash",
+      node.available ? undefined : "Node.js",
+      uv.available ? undefined : "uv",
+      rg.available ? undefined : "ripgrep",
+      ffmpeg.available ? undefined : "ffmpeg",
+    ].filter((value): value is string => Boolean(value));
+    const coreMissing = [
+      gitBash ? undefined : "Git Bash",
+      uv.available ? undefined : "uv",
+    ].filter((value): value is string => Boolean(value));
+    items.push(item({
+      id: "hermes.toolchain",
+      title: "Hermes Windows 工具链",
+      status: missing.length ? "warn" : "pass",
+      severity: missing.length ? "warning" : "info",
+      summary: missing.length
+        ? `发现 ${missing.length} 个官方安装工具链组件缺失或不可见：${missing.join("、")}。`
+        : "官方 Windows 工具链组件可见：Git Bash、Node.js、uv、ripgrep、ffmpeg。",
+      details: [
+        gitBash ? `Git Bash: ${gitBash}` : "Git Bash: 未检测到 HERMES_GIT_BASH_PATH 或 Hermes-managed git\\bin\\bash.exe",
+        `Node.js: ${node.message}`,
+        `uv: ${uv.message}`,
+        `ripgrep: ${rg.message}`,
+        `ffmpeg: ${ffmpeg.message}`,
+      ].join("\n"),
+      evidence: { rootPath, hermesHome, gitBash, node, uv, rg, ffmpeg },
+      autoFixable: false,
+      userActionRequired: coreMissing.length > 0,
+      suggestedActions: missing.length
+        ? ["重跑 Hermes Windows 安装脚本可补齐官方工具链；如果是企业网络限制，请展开安装日志确认 Node/PortableGit/uv 的下载源。"]
+        : [],
+      source: "one-click-diagnostics-orchestrator",
+    }));
   }
 
   private async checkWindowsRuntime(items: OneClickDiagnosticItem[], context: RuntimeContext, options: OneClickDiagnosticsRunOptions) {
@@ -439,6 +616,38 @@ export class OneClickDiagnosticsOrchestrator {
       suggestedActions: preflight.ok ? [] : ["先修复 Hermes 路径 / CLI capabilities，再启动 Gateway。"],
       source: "hermes-connector-service",
     }));
+  }
+
+  private async probeCommandChain(candidates: Array<{ command: string; args: string[]; label: string }>) {
+    const failures: string[] = [];
+    for (const candidate of candidates) {
+      if (looksLikeFilePath(candidate.command) && !(await pathExists(candidate.command))) {
+        failures.push(`${candidate.label}: 文件不存在`);
+        continue;
+      }
+      const result = await runCommand(candidate.command, candidate.args, {
+        cwd: process.cwd(),
+        timeoutMs: 8_000,
+        runtimeKind: "windows",
+        commandId: `one-click.toolchain.${candidate.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      }).catch((error) => ({ exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) }));
+      const output = (result.stdout || result.stderr || "").trim().split(/\r?\n/)[0]?.trim() ?? "";
+      if (result.exitCode === 0) {
+        return {
+          available: true,
+          command: candidate.command,
+          args: candidate.args,
+          label: candidate.label,
+          version: output,
+          message: output ? `${candidate.label} 可用：${output}` : `${candidate.label} 可用。`,
+        };
+      }
+      failures.push(`${candidate.label}: ${output || `exit ${result.exitCode ?? "unknown"}`}`);
+    }
+    return {
+      available: false,
+      message: failures.slice(0, 3).join("；") || "未检测到可用命令。",
+    };
   }
 
   private async runWindowsHermesCli(rootPath: string, cliPath: string, args: string[], pythonCommand: string) {
@@ -1057,6 +1266,128 @@ function auditItem(id: string, title: string, step: HermesSystemAuditStep | unde
     suggestedActions: step.status === "failed" ? ["检查模型配置、Hermes runtime 和运行权限。"] : [],
     source,
   });
+}
+
+function normalizeInstallSourceLabel(label: unknown): "official" | "mirror" | "custom" | "pinned" {
+  if (label === "official" || label === "mirror" || label === "pinned") return label;
+  if (label === "custom" || label === "fork") return "custom";
+  return "official";
+}
+
+function installSourceDiagnostic(label: "official" | "mirror" | "custom" | "pinned", repoUrl: string, ref: string): {
+  status: OneClickDiagnosticStatus;
+  severity: OneClickDiagnosticSeverity;
+  summary: string;
+  details?: string;
+  suggestedActions: string[];
+  userActionRequired: boolean;
+} {
+  if (label === "official") {
+    return {
+      status: "pass",
+      severity: "info",
+      summary: "安装来源为 Nous 官方 GitHub。",
+      details: `${repoUrl}@${ref}`,
+      suggestedActions: [],
+      userActionRequired: false,
+    };
+  }
+  if (label === "mirror") {
+    return {
+      status: "warn",
+      severity: "warning",
+      summary: "安装来源为中文社区/国内镜像，非 Nous 官方源。",
+      details: `${repoUrl}@${ref}`,
+      suggestedActions: ["网络恢复后建议切回 Nous 官方 GitHub；只在 GitHub 下载受限时使用国内社区镜像。"],
+      userActionRequired: false,
+    };
+  }
+  return {
+    status: "warn",
+    severity: "warning",
+    summary: label === "pinned" ? "安装来源为固定版本，请确认该 commit 仍符合预期。" : "安装来源为自定义仓库/分支，请确认来源可信。",
+    details: `${repoUrl}@${ref}`,
+    suggestedActions: ["仅在测试、内部 fork 或固定版本回滚时使用自定义来源；生产环境优先切回 Nous 官方 GitHub。"],
+    userActionRequired: false,
+  };
+}
+
+function installMarkerDiagnostic(rootPath: string | undefined, marker: ManagedInstallMarker | undefined): OneClickDiagnosticItem {
+  if (!rootPath) {
+    return skippedItem("hermes.install-marker", "Forge 安装标记", "Hermes 安装路径未配置，跳过安装标记检查。", "native-install-strategy");
+  }
+  if (!marker) {
+    return item({
+      id: "hermes.install-marker",
+      title: "Forge 安装标记",
+      status: "warn",
+      severity: "warning",
+      summary: "未找到 Forge 托管安装标记；可能是原版手动安装或旧版本 Forge 安装。",
+      evidence: { rootPath, markerPath: path.join(rootPath, ".zhenghebao-managed-install.json") },
+      autoFixable: false,
+      userActionRequired: false,
+      suggestedActions: ["如需让 Forge 记录来源、commit 和安装器信息，可通过设置中心重跑安装/修复。"],
+      source: "native-install-strategy",
+    });
+  }
+  return item({
+    id: "hermes.install-marker",
+    title: "Forge 安装标记",
+    status: "pass",
+    severity: "info",
+    summary: marker.installedCommit
+      ? `Forge 托管安装标记存在，当前安装 commit：${marker.installedCommit.slice(0, 12)}。`
+      : "Forge 托管安装标记存在，但未记录安装 commit。",
+    details: [
+      `repo: ${marker.repoUrl ?? "unknown"}`,
+      `ref: ${marker.commit ?? marker.branch ?? "main"}`,
+      `installer: ${marker.installer ?? "unknown"}`,
+      `installedAt: ${marker.installedAt ?? "unknown"}`,
+    ].join("\n"),
+    evidence: { rootPath, marker },
+    autoFixable: false,
+    userActionRequired: false,
+    suggestedActions: [],
+    source: "native-install-strategy",
+  });
+}
+
+async function readManagedInstallMarker(rootPath: string): Promise<ManagedInstallMarker | undefined> {
+  const markerPath = path.join(rootPath, ".zhenghebao-managed-install.json");
+  const raw = await fs.readFile(markerPath, "utf8").catch(() => "");
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as ManagedInstallMarker;
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveOptionalPath(provider?: (() => Promise<string> | string) | string): Promise<string | undefined> {
+  if (!provider) return undefined;
+  const value = typeof provider === "function" ? await provider() : provider;
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function samePath(a: string, b: string): boolean {
+  return path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase();
+}
+
+function looksLikeFilePath(value: string) {
+  return path.isAbsolute(value) || /[\\/]/.test(value);
+}
+
+async function firstExistingPath(candidates: string[]) {
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+async function pathExists(targetPath: string) {
+  return fs.access(targetPath).then(() => true).catch(() => false);
 }
 
 function summarize(items: OneClickDiagnosticItem[]): OneClickDiagnosticsReport["summary"] {

@@ -266,10 +266,10 @@ export class RuntimeProbeService {
       add("python_missing", input.runtime.mode === "windows" ? "error" : "warning", `${label} 不可用。`, input.python.message, "请安装 Python 或在设置中填写 Hermes Python 命令。");
     }
     if (!input.git.available) {
-      add("git_missing", "warning", "Git 不可用。", input.git.message, "官网 Windows 安装脚本会优先尝试自动补齐；若失败请手动安装 Git。");
+      add("git_missing", "warning", "Git 不可用。", input.git.message, "Hermes Windows 安装脚本会优先使用系统 Git，缺失时会下载隔离的 PortableGit；若仍失败请按安装日志手动处理。");
     }
     if (process.platform === "win32" && !input.winget.available) {
-      add("winget_missing", "warning", "winget 不可用。", input.winget.message, "官网 Windows 安装脚本仍会尝试 uv/zip 等路径；缺失系统包时请按诊断日志手动安装。");
+      add("winget_missing", "warning", "winget 不可用。", input.winget.message, "Hermes Windows 安装脚本仍会尝试 uv、PortableGit、Node 二进制等隔离安装路径；缺失系统包时请按诊断日志手动安装。");
     }
     if (!input.hermesRootExists) {
       add("hermes_root_missing", "error", "Hermes root 不存在。", undefined, "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。");

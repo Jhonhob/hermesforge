@@ -33,6 +33,12 @@ type InstallPublisher = (event: HermesInstallEvent) => void;
 type PythonLauncher = { command: string; argsPrefix: string[]; label: string };
 export type HermesInstallOptions = {
   rootPath?: string;
+  source?: {
+    kind: "official" | "mirror" | "custom";
+    repoUrl?: string;
+    branch?: string;
+    commit?: string;
+  };
 };
 
 export class SetupService {
@@ -408,6 +414,13 @@ export class SetupService {
       });
     }
     return await this.installInFlight;
+  }
+
+  async cancelInstallHermes(): Promise<{ ok: boolean; message: string }> {
+    if (this.installOrchestrator) {
+      return this.installOrchestrator.cancelInstall();
+    }
+    return { ok: false, message: "当前安装流程暂不支持取消，请等待当前命令结束。" };
   }
 
   async repairDependency(id: SetupDependencyRepairId): Promise<SetupDependencyRepairResult> {
@@ -1368,7 +1381,7 @@ export class SetupService {
           status: "missing",
           message: compatibility.blockingIssues[0] ?? "Hermes Agent 未安装或不可启动。",
           description: "Windows Native Hermes 是默认运行环境；未安装时无法可靠执行真实任务。",
-          recommendedAction: "点击一键修复，程序会使用官方 Windows 安装脚本安装 Hermes。",
+          recommendedAction: "点击一键修复，程序会使用当前选择的 Windows 安装来源安装 Hermes。",
           fixAction: "install_hermes",
           blocking: true,
         };
@@ -1446,7 +1459,7 @@ export class SetupService {
         status: "missing",
         message: `Hermes Agent 安装不完整或不可启动：${health.message}`,
         description: "兼容性检查需要先有可执行的 Windows Hermes CLI；当前目录可能是旧残留、占位文件或未完成安装。",
-        recommendedAction: "点击一键修复，程序会隔离残留目录并重跑官方 Windows 安装脚本。",
+        recommendedAction: "点击一键修复，程序会隔离残留目录并重跑当前选择的 Windows 安装来源。",
         fixAction: "install_hermes",
         blocking: true,
       };

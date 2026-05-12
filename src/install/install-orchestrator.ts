@@ -24,6 +24,13 @@ export class InstallOrchestrator {
     return this.nativeStrategy.install(publish, { ...options, mode: "windows" });
   }
 
+  async cancelInstall(): Promise<{ ok: boolean; message: string }> {
+    if (!this.nativeStrategy.cancelInstall) {
+      return { ok: false, message: "当前安装策略不支持取消。" };
+    }
+    return this.nativeStrategy.cancelInstall();
+  }
+
   async update(options: InstallOptions = {}): Promise<InstallStrategyUpdateResult> {
     return this.nativeStrategy.update();
   }

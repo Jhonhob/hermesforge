@@ -90,6 +90,7 @@ export const IpcChannels = {
   clientUpdateEvent: "updates:client-event",
   updateHermes: "updates:hermes",
   installHermes: "setup:install-hermes",
+  cancelInstallHermes: "setup:cancel-install-hermes",
   installHermesEvent: "setup:install-hermes:event",
   repairSetupDependency: "setup:repair-dependency",
   getRuntimeConfig: "config:get-runtime",

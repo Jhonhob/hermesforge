@@ -13,11 +13,15 @@ export type InstallTargetMode = HermesRuntimeConfig["mode"];
 export type InstallPhase =
   | "plan"
   | "preflight"
+  | "downloading_script"
   | "repairing_dependencies"
   | "recovering"
   | "cloning"
+  | "running_installer"
   | "installing_dependencies"
   | "health_check"
+  | "cancelling"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -50,6 +54,12 @@ export type InstallPublisher = (event: HermesInstallEvent) => void;
 export type InstallOptions = {
   rootPath?: string;
   mode?: InstallTargetMode;
+  source?: {
+    kind: "official" | "mirror" | "custom";
+    repoUrl?: string;
+    branch?: string;
+    commit?: string;
+  };
 };
 
 export type InstallStrategyResult = HermesInstallResult & {

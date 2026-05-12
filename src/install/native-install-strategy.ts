@@ -5,7 +5,7 @@ import type { EngineAdapter } from "../adapters/engine-adapter";
 import type { AppPaths } from "../main/app-paths";
 import { resolveActiveHermesHome } from "../main/hermes-home";
 import type { RuntimeConfigStore } from "../main/runtime-config";
-import { runCommand } from "../process/command-runner";
+import { runCommand, streamCommand } from "../process/command-runner";
 import type { RuntimeAdapterFactory } from "../runtime/runtime-adapter";
 import type { RuntimeProbeService } from "../runtime/runtime-probe-service";
 import { validateNativeHermesCli } from "../runtime/hermes-cli-resolver";
@@ -26,12 +26,12 @@ import type {
   InstallStrategyUpdateResult,
 } from "./install-types";
 import { installStep } from "./install-types";
-import { resolveInstallSource } from "./install-source";
+import { DEFAULT_PINNED_HERMES_SOURCE, resolveInstallSource, resolveInstallSourceFromOption } from "./install-source";
 import type { InstallSource } from "./install-source";
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 30 * 60 * 1000;
 const OFFICIAL_WINDOWS_INSTALLER_URL = "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1";
-const OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL = "https://res1.hermesagent.org.cn/install.ps1";
+const COMMUNITY_MIRROR_WINDOWS_INSTALLER_URL = "https://res1.hermesagent.org.cn/install.ps1";
 const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent.git";
 
 type PythonLauncher = { command: string; argsPrefix: string[]; label: string };
@@ -59,6 +59,9 @@ type GitSyncResult =
 export class NativeInstallStrategy implements InstallStrategy {
   readonly kind = "native" as const;
   private installInFlight?: Promise<InstallStrategyResult>;
+  private installAbortController?: AbortController;
+  private installPublisher?: InstallPublisher;
+  private installStartedAt?: string;
 
   constructor(
     private readonly appPaths: AppPaths,
@@ -77,8 +80,8 @@ export class NativeInstallStrategy implements InstallStrategy {
       mode: "windows",
       ok: !probe || probe.powershellAvailable,
       summary: probe
-        ? "Windows Native 官网脚本安装策略已生成计划。"
-        : "Windows Native 官网脚本安装策略已生成 legacy 计划。",
+        ? "Windows Native install.ps1 安装策略已生成计划。"
+        : "Windows Native install.ps1 安装策略已生成 legacy 计划。",
       issues,
       runtimeProbe: probe,
       steps: [
@@ -87,7 +90,7 @@ export class NativeInstallStrategy implements InstallStrategy {
           step: "select-native",
           status: "passed",
           code: "native_selected",
-          summary: "已选择 Windows Native 官网 install.ps1 安装策略。",
+          summary: "已选择 Windows Native install.ps1 安装策略。",
           debugContext: { rootPath },
         }),
         installStep({
@@ -111,7 +114,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       message: error instanceof Error ? error.message : String(error),
     }));
     if (!preflight.available) {
-      log.push(`Hermes update preflight failed; reinstalling through official installer. Reason: ${preflight.message}`);
+      log.push(`Hermes update preflight failed; reinstalling through selected installer. Reason: ${preflight.message}`);
       const reinstall = await this.performInstallHermes(undefined, { rootPath: hermesRoot, mode: "windows" }, true);
       return {
         ok: reinstall.ok,
@@ -163,13 +166,13 @@ export class NativeInstallStrategy implements InstallStrategy {
       message: error instanceof Error ? error.message : String(error),
     }));
     if (!postRepair.available) {
-      log.push(`Hermes repair left CLI unusable; reinstalling through official installer. Reason: ${postRepair.message}`);
+      log.push(`Hermes repair left CLI unusable; reinstalling through selected installer. Reason: ${postRepair.message}`);
       const reinstall = await this.performInstallHermes(undefined, { rootPath: hermesRoot, mode: "windows" }, true);
       return {
         ok: reinstall.ok,
         engineId: "hermes",
         message: reinstall.ok
-          ? "Hermes 已通过官方安装脚本重装修复。"
+          ? "Hermes 已通过所选安装脚本重装修复。"
           : `Hermes 重装修复后仍不可用：${reinstall.message}`,
         log: [...log, ...reinstall.log],
         logPath: reinstall.logPath,
@@ -189,11 +192,34 @@ export class NativeInstallStrategy implements InstallStrategy {
 
   async install(publish?: InstallPublisher, options: InstallOptions = {}): Promise<InstallStrategyResult> {
     if (!this.installInFlight) {
-      this.installInFlight = this.performInstallHermes(publish, options).finally(() => {
+      this.installAbortController = new AbortController();
+      this.installPublisher = publish;
+      this.installStartedAt = new Date().toISOString();
+      this.installInFlight = this.performInstallHermes(publish, options, false, this.installAbortController.signal, this.installStartedAt).finally(() => {
         this.installInFlight = undefined;
+        this.installAbortController = undefined;
+        this.installPublisher = undefined;
+        this.installStartedAt = undefined;
       });
     }
     return await this.installInFlight;
+  }
+
+  async cancelInstall(): Promise<{ ok: boolean; message: string }> {
+    if (!this.installAbortController) {
+      return { ok: false, message: "当前没有正在运行的 Hermes 安装。" };
+    }
+    const startedAt = this.installStartedAt ?? new Date().toISOString();
+    this.installPublisher?.({
+      stage: "cancelling",
+      progress: 96,
+      message: "正在取消 Hermes 安装。",
+      detail: "正在终止后台 PowerShell 安装进程...",
+      startedAt,
+      at: new Date().toISOString(),
+    });
+    this.installAbortController.abort();
+    return { ok: true, message: "已请求取消 Hermes 安装，后台进程正在终止。" };
   }
 
   async repairDependency(id: SetupDependencyRepairId): Promise<InstallStrategyRepairResult> {
@@ -262,39 +288,64 @@ export class NativeInstallStrategy implements InstallStrategy {
     };
   }
 
-  private async performInstallHermes(publish?: InstallPublisher, options: InstallOptions = {}, forceRunOfficialInstaller = false): Promise<InstallStrategyResult> {
+  private async performInstallHermes(
+    publish?: InstallPublisher,
+    options: InstallOptions = {},
+    forceRunOfficialInstaller = false,
+    signal?: AbortSignal,
+    requestedStartedAt?: string,
+  ): Promise<InstallStrategyResult> {
     const log: string[] = [];
-    const startedAt = new Date().toISOString();
+    const startedAt = requestedStartedAt ?? new Date().toISOString();
     const logDir = path.join(this.appPaths.baseDir(), "diagnostics", "install-logs");
     const logPath = path.join(logDir, `hermes-install-${startedAt.replace(/[:.]/g, "-")}.log`);
     const scriptPath = path.join(logDir, `official-install-${startedAt.replace(/[:.]/g, "-")}.ps1`);
 
-    const emit = (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => {
+    const configForSource = await this.configStore.read().catch(() => ({ modelProfiles: [], updateSources: {} }));
+    const installSource = resolveInstallSourceFromOption(configForSource, options.source);
+    const installerUrls = this.installerUrlsForSource(installSource);
+
+    const emit = (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string, extra?: Partial<Parameters<InstallPublisher>[0]>) => {
       const line = `[${stage}] ${message}${detail ? ` | ${detail}` : ""}`;
       log.push(line);
-      publish?.({ stage, message, detail, progress, startedAt, at: new Date().toISOString() });
+      publish?.({
+        stage,
+        message,
+        detail,
+        progress,
+        startedAt,
+        at: new Date().toISOString(),
+        sourceLabel: installSource.sourceLabel,
+        sourceUrl: extra?.sourceUrl ?? installSource.repoUrl,
+        elapsedSeconds: Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000)),
+        ...extra,
+      });
     };
 
     const finish = async (
       result: Omit<InstallStrategyResult, "engineId" | "log" | "logPath" | "plan">,
       stage: Parameters<InstallPublisher>[0]["stage"],
     ) => {
-      if (stage === "completed" || stage === "failed") {
-        emit(stage, 100, result.message, result.rootPath);
+      if (stage === "completed" || stage === "failed" || stage === "cancelled") {
+        emit(stage, 100, result.message, result.rootPath, {
+          logPath,
+          diagnosticCode: stage === "cancelled" ? "cancelled" : result.ok ? undefined : this.diagnosticCodeForOutput(log.join("\n")),
+        });
       }
       await this.writeInstallLog(logDir, logPath, result.message, log);
       return { ...result, engineId: "hermes" as const, log, logPath, plan: await this.plan({ rootPath: result.rootPath, mode: "windows" }) };
     };
 
     try {
+      this.throwIfAborted(signal);
       emit("preflight", 5, "正在检测本机环境。");
       const currentHealth = await this.hermes.healthCheck().catch((error) => {
         log.push(`Current Hermes check failed: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
       });
-      if (currentHealth?.available && !forceRunOfficialInstaller) {
+      if (currentHealth?.available && !forceRunOfficialInstaller && this.canReuseExistingInstallForSource(installSource)) {
         const rootPath = currentHealth.path ?? await this.configStore.getEnginePath("hermes");
-        await this.saveHermesRoot(rootPath);
+        await this.saveHermesRoot(rootPath, installSource);
         log.push(`Hermes is already available at ${rootPath}.`);
         return await finish({ ok: true, rootPath, message: `已检测到可用 Hermes：${rootPath}` }, "completed");
       }
@@ -308,8 +359,8 @@ export class NativeInstallStrategy implements InstallStrategy {
         log.push(`Ignored Windows-incompatible install target: ${requestedRoot}`);
       }
       log.push(`Hermes home: ${hermesHome}`);
-      log.push(`Official installer: ${OFFICIAL_WINDOWS_INSTALLER_URL}`);
-      log.push(`Official installer fallback: ${OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL}`);
+      log.push(`Install source: ${installSource.sourceLabel} ${installSource.repoUrl}@${installSource.commit ?? installSource.branch ?? "main"}`);
+      log.push(`Installer source(s): ${installerUrls.join(", ")}`);
 
       await this.assertWritableDirectory(logDir, "安装日志目录", log);
       await this.assertWritableDirectory(parentDir, "Hermes 安装父目录", log);
@@ -318,7 +369,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       const targetState = await this.inspectTargetDirectory(rootPath, log);
       if (targetState.exists && targetState.isEmpty) {
         await fs.rm(rootPath, { recursive: true, force: true });
-        log.push(`Removed empty target directory ${rootPath} before official install.`);
+        log.push(`Removed empty target directory ${rootPath} before selected installer run.`);
       } else if (targetState.exists && !targetState.hasOfficialCli && targetState.recoverable) {
         const stalePath = `${rootPath}.stale-${Date.now()}`;
         await fs.rename(rootPath, stalePath);
@@ -331,37 +382,54 @@ export class NativeInstallStrategy implements InstallStrategy {
         }, "failed");
       }
 
-      const powershell = await this.runLogged("powershell.exe", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], process.cwd(), log, 15_000);
+      const powershell = await this.runLogged("powershell.exe", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], process.cwd(), log, 15_000, { signal });
       if (powershell.exitCode !== 0) {
-        return await finish({ ok: false, rootPath, message: "无法自动安装 Hermes：未检测到可用 PowerShell。" }, "failed");
+        return await finish({ ok: false, rootPath, message: "无法自动安装 Hermes：未检测到可用 PowerShell。请确认 Windows PowerShell 可启动后重试。" }, "failed");
       }
 
-      emit("cloning", 20, "正在下载 Hermes 官方 Windows 安装脚本。", OFFICIAL_WINDOWS_INSTALLER_URL);
-      const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log);
+      this.throwIfAborted(signal);
+      emit("downloading_script", 20, "正在下载 Hermes Windows 安装脚本。", installerUrls[0], { sourceUrl: installerUrls[0] });
+      const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log, installerUrls, signal);
       if (!download.ok) {
-        return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本下载失败，详情见安装日志：${logPath}` }, "failed");
+        return await finish({ ok: false, rootPath, message: `Hermes 安装脚本下载失败：无法访问 ${installerUrls.join(" 或 ")}。请检查网络，或切换安装来源后重试。详情见安装日志：${logPath}` }, "failed");
       }
       await this.patchOfficialInstallerScript(scriptPath, log);
 
-      emit("installing_dependencies", 45, "正在运行 Hermes 官方 Windows 安装脚本。", rootPath);
+      this.throwIfAborted(signal);
+      emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本。", rootPath, { sourceUrl: download.url });
       const installerArgs = await this.officialInstallerArgs(scriptPath, hermesHome, rootPath);
       log.push(`Official installer args: ${installerArgs.join(" ")}`);
       const install = await this.runLogged("powershell.exe", installerArgs, logDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+        signal,
         heartbeatMs: 15_000,
         onHeartbeat: (elapsedSeconds) => {
           const minutes = Math.floor(elapsedSeconds / 60);
           let detail = `已等待 ${elapsedSeconds} 秒。官方脚本正在后台下载并安装依赖，这是正常现象。`;
           if (elapsedSeconds > 120) {
-            detail += " 如果长时间卡住，可能是网络连接较慢或 PowerShell 执行策略被组策略限制。你可以点击「取消安装」后前往 hermesagent.org.cn 下载手动安装包。";
+            detail += " 如果长时间卡住，可能是网络连接较慢、依赖源受限或 PowerShell 执行策略被组策略限制。可以展开日志定位阻塞项，或取消后切换国内社区镜像重试。";
           }
-          emit("installing_dependencies", 55, minutes >= 2 ? `官方安装脚本仍在运行（已 ${minutes} 分钟）` : "官方安装脚本仍在运行，请保持网络连接。", detail);
+          emit("running_installer", 55, minutes >= 2 ? `安装脚本仍在运行（已 ${minutes} 分钟）` : "安装脚本仍在运行，请保持网络连接。", detail);
+        },
+        onLine: (line) => {
+          const mapped = installerProgressFromLine(line);
+          emit("running_installer", mapped.progress, mapped.message, line, { logLine: line, sourceUrl: download.url });
         },
       });
+      if (signal?.aborted) {
+        return await finish({ ok: false, rootPath, message: "Hermes 安装已取消。" }, "cancelled");
+      }
       if (install.exitCode !== 0) {
-        return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本执行失败，详情见安装日志：${logPath}` }, "failed");
+        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath);
+        return await finish({ ok: false, rootPath, message: diagnostic }, "failed");
       }
       if (this.officialInstallerReportedFailure(install.stdout, install.stderr)) {
-        return await finish({ ok: false, rootPath, message: `Hermes 官方安装脚本报告失败，详情见安装日志：${logPath}` }, "failed");
+        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath);
+        return await finish({ ok: false, rootPath, message: `Hermes 安装脚本报告失败：${diagnostic}` }, "failed");
+      }
+
+      const sourceSync = await this.syncInstalledSourceIfNeeded(rootPath, installSource, log, signal);
+      if (!sourceSync.ok) {
+        return await finish({ ok: false, rootPath, message: `${sourceSync.message} 详情见安装日志：${logPath}` }, "failed");
       }
 
       emit("health_check", 82, "正在校验 Hermes 是否可启动。", rootPath);
@@ -378,9 +446,10 @@ export class NativeInstallStrategy implements InstallStrategy {
       await this.verifyHermesHomeWritable(hermesHome, log);
       await this.recordManagedWindowsTools(hermesHome, log);
       const editable = await this.detectEditableInstall(rootPath, log);
-      await this.writeManagedMarker(rootPath, editable);
+      const installedCommit = await this.currentGitCommit(rootPath, log);
+      await this.writeManagedMarker(rootPath, editable, installSource, installedCommit);
       const previousHermesRoot = (await this.configStore.read()).enginePaths?.hermes;
-      await this.saveHermesRoot(rootPath);
+      await this.saveHermesRoot(rootPath, installSource);
 
       const adapterHealth = await this.hermes.healthCheck().catch((error) => {
         log.push(`Post-install adapter health check threw: ${error instanceof Error ? error.message : String(error)}`);
@@ -397,6 +466,15 @@ export class NativeInstallStrategy implements InstallStrategy {
 
       return await finish({ ok: true, rootPath, message: `Hermes 已自动安装完成并通过检查：${rootPath}` }, "completed");
     } catch (error) {
+      if (signal?.aborted) {
+        const rootPath = await this.resolveInstallRoot(options.rootPath).catch(() => this.defaultInstallRoot());
+        log.push("Install cancelled by user.");
+        return await finish({
+          ok: false,
+          message: "Hermes 安装已取消。",
+          rootPath,
+        }, "cancelled");
+      }
       const message = error instanceof Error ? error.message : String(error);
       log.push(`Install crashed: ${message}`);
       return await finish({
@@ -414,8 +492,8 @@ export class NativeInstallStrategy implements InstallStrategy {
       ok: result.ok,
       id,
       message: result.ok
-        ? "Hermes 官方安装脚本已重跑完成，请重新检测依赖状态。"
-        : `Hermes 官方安装脚本修复失败：${result.message}`,
+        ? "Hermes Windows 安装脚本已重跑完成，请重新检测依赖状态。"
+        : `Hermes Windows 安装脚本修复失败：${result.message}`,
       stdout: result.log.join("\n"),
       stderr: result.ok ? "" : result.message,
       logPath: result.logPath,
@@ -426,19 +504,19 @@ export class NativeInstallStrategy implements InstallStrategy {
     };
   }
 
-  private async downloadOfficialInstallerScript(scriptPath: string, cwd: string, log: string[]) {
-    for (const url of [OFFICIAL_WINDOWS_INSTALLER_URL, OFFICIAL_WINDOWS_INSTALLER_FALLBACK_URL]) {
+  private async downloadOfficialInstallerScript(scriptPath: string, cwd: string, log: string[], urls: string[], signal?: AbortSignal) {
+    for (const url of urls) {
       const downloadScript = [
         "$ProgressPreference='SilentlyContinue';",
         `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;`,
         `Invoke-WebRequest -UseBasicParsing -Uri ${psQuote(url)} -OutFile ${psQuote(scriptPath)};`,
       ].join(" ");
-      const result = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", downloadScript], cwd, log, 120_000);
+      const result = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", downloadScript], cwd, log, 120_000, { signal });
       if (result.exitCode === 0 && await this.exists(scriptPath)) {
         log.push(`Official installer downloaded from ${url}.`);
         return { ok: true, url };
       }
-      log.push(`Official installer download failed from ${url}; trying next source if available.`);
+      log.push(`Installer download failed from ${url}; trying next configured source if available.`);
     }
     return { ok: false };
   }
@@ -468,6 +546,75 @@ export class NativeInstallStrategy implements InstallStrategy {
   private officialInstallerReportedFailure(stdout: string, stderr: string) {
     const output = `${stdout}\n${stderr}`;
     return /Installation failed:|uv installation failed|Python .* not available|Git not available and auto-install failed|Failed to download repository/i.test(output);
+  }
+
+  private installFailureMessage(stdout: string, stderr: string, logPath: string) {
+    const code = this.diagnosticCodeForOutput(`${stdout}\n${stderr}`);
+    const hint = diagnosticHint(code);
+    return `${hint} 详情见安装日志：${logPath}`;
+  }
+
+  private installerUrlsForSource(source: InstallSource) {
+    return source.sourceLabel === "mirror"
+      ? [COMMUNITY_MIRROR_WINDOWS_INSTALLER_URL]
+      : [OFFICIAL_WINDOWS_INSTALLER_URL];
+  }
+
+  private canReuseExistingInstallForSource(source: InstallSource) {
+    return source.sourceLabel === "official" || source.sourceLabel === "mirror";
+  }
+
+  private throwIfAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw new Error("install_cancelled");
+  }
+
+  private async syncInstalledSourceIfNeeded(rootPath: string, source: InstallSource, log: string[], signal?: AbortSignal) {
+    const targetBranch = source.branch?.trim() || "main";
+    const isDefaultOfficial = source.repoUrl === OFFICIAL_HERMES_REPO_URL
+      && source.sourceLabel !== "custom"
+      && !source.commit
+      && targetBranch === "main";
+    if (isDefaultOfficial) {
+      log.push("Install source sync skipped; official main is handled by the installer.");
+      return { ok: true, message: "安装源无需额外同步。" };
+    }
+
+    this.throwIfAborted(signal);
+    log.push(`Synchronizing installed Hermes source to ${source.repoUrl}@${source.commit ?? targetBranch}`);
+    const commands = source.commit
+      ? [
+        ["remote", "set-url", "origin", source.repoUrl],
+        ["fetch", "--depth", "1", "origin", source.commit],
+        ["checkout", "--detach", "FETCH_HEAD"],
+      ]
+      : [
+        ["remote", "set-url", "origin", source.repoUrl],
+        ["fetch", "--depth", "1", "origin", targetBranch],
+        ["checkout", targetBranch],
+        ["reset", "--hard", "FETCH_HEAD"],
+      ];
+    for (const args of commands) {
+      const result = await this.runLogged("git", args, rootPath, log, 120_000, { signal });
+      if (result.exitCode !== 0) {
+        return {
+          ok: false,
+          message: `Hermes 源同步失败：git ${args.join(" ")} 未成功。请检查仓库地址、分支/commit 和网络连接。`,
+        };
+      }
+    }
+    return { ok: true, message: "安装源已同步。" };
+  }
+
+  private diagnosticCodeForOutput(output: string) {
+    if (/PowerShell|powershell/i.test(output) && /not.*found|无法|not recognized|failed/i.test(output)) return "powershell_unavailable";
+    if (/Invoke-WebRequest|download.*install|安装脚本下载|Could not resolve host|timed out|TLS|SSL/i.test(output)) return "script_download_failed";
+    if (/Failed to download repository|git clone|git fetch|Could not resolve host|repository not found|Authentication failed/i.test(output)) return "repo_download_failed";
+    if (/uv installation failed|uv .*failed|astral|venv/i.test(output)) return "uv_or_venv_failed";
+    if (/winget|Git not available and auto-install failed|Python .* not available/i.test(output)) return "system_dependency_failed";
+    if (/pip|No matching distribution|Could not find a version|subprocess-exited-with-error/i.test(output)) return "pip_dependency_failed";
+    if (/目标目录|not.*Hermes|recoverable|occupied|access is denied|EPERM|EACCES/i.test(output)) return "target_directory_blocked";
+    if (/health|Hermes CLI|--version|capabilities|自检/i.test(output)) return "health_check_failed";
+    return "install_failed";
   }
 
   private async repairWithWinget(id: SetupDependencyRepairId, label: string, packageId: string): Promise<InstallStrategyRepairResult> {
@@ -556,7 +703,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       stdout: lastResult?.stdout ?? "",
       stderr: lastResult?.stderr ?? "",
       logPath,
-      recommendedFix: `请先重跑 Hermes 官方安装脚本；若仍失败，请在 Hermes venv 中执行 python -m pip install ${packageName}。`,
+      recommendedFix: `请先重跑 Hermes Windows 安装脚本；若仍失败，请在 Hermes venv 中执行 python -m pip install ${packageName}。`,
       plan: await this.plan(),
     };
   }
@@ -674,8 +821,9 @@ export class NativeInstallStrategy implements InstallStrategy {
     }
   }
 
-  private async saveHermesRoot(rootPath: string) {
+  private async saveHermesRoot(rootPath: string, installSource?: InstallSource) {
     const config = await this.configStore.read();
+    const source = installSource ?? resolveInstallSource(config);
     await this.configStore.write({
       ...config,
       enginePaths: { ...(config.enginePaths ?? {}), hermes: rootPath },
@@ -685,9 +833,10 @@ export class NativeInstallStrategy implements InstallStrategy {
         distro: undefined,
         managedRoot: rootPath,
         installSource: {
-          repoUrl: OFFICIAL_HERMES_REPO_URL,
-          branch: "main",
-          sourceLabel: "official",
+          repoUrl: source.repoUrl,
+          branch: source.branch ?? "main",
+          commit: source.commit,
+          sourceLabel: source.sourceLabel,
         },
       },
     });
@@ -809,20 +958,43 @@ export class NativeInstallStrategy implements InstallStrategy {
     return Number.isFinite(count) ? count : undefined;
   }
 
-  private async runLogged(command: string, args: string[], cwd: string, log: string[], timeoutMs: number, heartbeat?: { heartbeatMs: number; onHeartbeat: (elapsedSeconds: number) => void }) {
+  private async runLogged(command: string, args: string[], cwd: string, log: string[], timeoutMs: number, heartbeat?: { heartbeatMs?: number; onHeartbeat?: (elapsedSeconds: number) => void; signal?: AbortSignal; onLine?: (line: string) => void }) {
     log.push(`$ ${command} ${args.join(" ")}`);
     const startedAt = Date.now();
-    const timer = heartbeat ? setInterval(() => {
+    const timer = heartbeat?.heartbeatMs && heartbeat.onHeartbeat ? setInterval(() => {
       const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
       log.push(`[heartbeat] ${command} still running after ${elapsedSeconds}s`);
-      heartbeat.onHeartbeat(elapsedSeconds);
+      heartbeat.onHeartbeat?.(elapsedSeconds);
     }, heartbeat.heartbeatMs) : undefined;
-    const result = await runCommand(command, args, { cwd, timeoutMs });
-    if (timer) clearInterval(timer);
-    if (result.stdout.trim()) log.push(result.stdout.trim());
-    if (result.stderr.trim()) log.push(result.stderr.trim());
-    log.push(`exit ${result.exitCode ?? "unknown"}`);
-    return result;
+    try {
+      if (!heartbeat?.onLine) {
+        const result = await runCommand(command, args, { cwd, timeoutMs, signal: heartbeat?.signal });
+        if (result.stdout.trim()) log.push(result.stdout.trim());
+        if (result.stderr.trim()) log.push(result.stderr.trim());
+        log.push(`exit ${result.exitCode ?? "unknown"}`);
+        return result;
+      }
+
+      let stdout = "";
+      let stderr = "";
+      let exitCode: number | null = null;
+      for await (const event of streamCommand(command, args, { cwd, timeoutMs, signal: heartbeat.signal })) {
+        if (event.type === "stdout" || event.type === "stderr") {
+          const line = event.line.trim();
+          if (!line) continue;
+          if (event.type === "stdout") stdout += `${line}\n`;
+          else stderr += `${line}\n`;
+          log.push(line);
+          heartbeat.onLine(line);
+        } else {
+          exitCode = event.exitCode;
+        }
+      }
+      log.push(`exit ${exitCode ?? "unknown"}`);
+      return { exitCode, stdout, stderr };
+    } finally {
+      if (timer) clearInterval(timer);
+    }
   }
 
   private async inspectTargetDirectory(rootPath: string, log: string[]) {
@@ -964,17 +1136,31 @@ export class NativeInstallStrategy implements InstallStrategy {
     return false;
   }
 
-  private async writeManagedMarker(rootPath: string, editable: boolean) {
+  private async writeManagedMarker(rootPath: string, editable: boolean, installSource?: InstallSource, installedCommit?: string) {
+    const source = installSource ?? DEFAULT_PINNED_HERMES_SOURCE;
     const markerPath = path.join(rootPath, ".zhenghebao-managed-install.json");
     await fs.writeFile(markerPath, JSON.stringify({
       source: "zhenghebao",
-      installer: OFFICIAL_WINDOWS_INSTALLER_URL,
-      repoUrl: OFFICIAL_HERMES_REPO_URL,
-      branch: "main",
-      sourceLabel: "official",
+      installer: this.installerUrlsForSource(source)[0],
+      repoUrl: source.repoUrl,
+      branch: source.branch ?? "main",
+      commit: source.commit,
+      installedCommit,
+      sourceLabel: source.sourceLabel,
       editable,
       installedAt: new Date().toISOString(),
     }, null, 2), "utf8");
+  }
+
+  private async currentGitCommit(rootPath: string, log: string[]) {
+    const result = await this.runLogged("git", ["rev-parse", "HEAD"], rootPath, log, 15_000).catch(() => undefined);
+    const commit = result?.exitCode === 0 ? result.stdout.trim() : "";
+    if (commit) {
+      log.push(`Installed commit: ${commit}`);
+      return commit;
+    }
+    log.push("Installed commit could not be resolved.");
+    return undefined;
   }
 
   private async writeInstallLog(logDir: string, logPath: string, message: string, log: string[]) {
@@ -1156,6 +1342,58 @@ export class NativeInstallStrategy implements InstallStrategy {
 
 function looksLikeFilePath(value: string) {
   return path.isAbsolute(value) || /[\\/]/.test(value);
+}
+
+function diagnosticHint(code: string) {
+  switch (code) {
+    case "powershell_unavailable":
+      return "PowerShell 不可用或被策略拦截，请确认 powershell.exe 可启动后重试。";
+    case "script_download_failed":
+      return "安装脚本下载失败，请检查网络、代理或切换安装来源。";
+    case "repo_download_failed":
+      return "Hermes 仓库下载失败，请检查 GitHub 访问、仓库地址、分支/commit 或代理设置。";
+    case "uv_or_venv_failed":
+      return "uv 或 Python 虚拟环境创建失败，请检查 Python、磁盘权限和依赖下载网络。";
+    case "system_dependency_failed":
+      return "Git/Python/winget 等系统依赖安装失败，请手动安装缺失依赖或重启客户端后重试。";
+    case "pip_dependency_failed":
+      return "Python 依赖安装失败，请检查 pip 网络源、Python 版本和安装目录权限。";
+    case "target_directory_blocked":
+      return "安装目录被占用或不是可恢复的 Hermes 安装，请更换空目录或清理残留后重试。";
+    case "health_check_failed":
+      return "Hermes 文件已落地但 CLI 自检失败，请查看日志中的 --version/capabilities 输出。";
+    default:
+      return "Hermes 安装脚本执行失败，请展开实时日志定位阻塞项。";
+  }
+}
+
+function installerProgressFromLine(line: string) {
+  const text = line.trim();
+  if (/checking .*uv|installing uv|uv python install|python 3\.11|checking python/i.test(text)) {
+    return { progress: 50, message: "正在准备 uv / Python 环境。" };
+  }
+  if (/Git not found|PortableGit|MinGit|HERMES_GIT_BASH_PATH|Checking Git|Installing Git|downloading .*Git/i.test(text)) {
+    return { progress: 56, message: "正在准备 Git / Git Bash 工具链。" };
+  }
+  if (/Checking Node|Node\.js|Installing Node|Downloading Node|npm/i.test(text)) {
+    return { progress: 62, message: "正在准备 Node.js 与浏览器工具依赖。" };
+  }
+  if (/ripgrep|ffmpeg|system packages|winget|chocolatey|scoop/i.test(text)) {
+    return { progress: 67, message: "正在准备 ripgrep / ffmpeg 等系统工具。" };
+  }
+  if (/download.*repository|clone|submodule|fetch|checkout|Hermes repository/i.test(text)) {
+    return { progress: 72, message: "正在下载或同步 Hermes 仓库。" };
+  }
+  if (/Installing Hermes|uv sync|pip install|Installing Python dependencies|venv/i.test(text)) {
+    return { progress: 78, message: "正在安装 Hermes Python 依赖。" };
+  }
+  if (/setup wizard|Skipping setup|gateway|Start messaging gateway/i.test(text)) {
+    return { progress: 86, message: "正在完成 Hermes 设置收尾。" };
+  }
+  if (/Installation complete|successfully|Next steps|Hermes is ready/i.test(text)) {
+    return { progress: 90, message: "安装脚本已完成，正在等待 Forge 复检。" };
+  }
+  return { progress: 55, message: "安装脚本正在输出日志。" };
 }
 
 function isLegacyPosixPath(value: string) {

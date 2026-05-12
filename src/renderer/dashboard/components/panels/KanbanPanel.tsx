@@ -37,6 +37,8 @@ const columns = [
   { id: "done", label: "已完成", help: "任务已结束" },
 ] as const;
 
+const creatableColumns = columns.filter((column) => column.id === "triage" || column.id === "todo");
+
 /** 状态 → 中文显示名 */
 const statusName: Record<string, string> = {
   triage: "待分类",
@@ -135,7 +137,11 @@ export function KanbanPanel() {
     };
   }, [diagnostics, filteredTasks.length, taskGroups]);
 
-  async function refresh(boardSlug = activeBoard) {
+  function selectedBoardSlug() {
+    return currentBoard?.slug || activeBoard || undefined;
+  }
+
+  async function refresh(boardSlug = activeBoard, archived = includeArchived) {
     if (!window.workbenchClient) return;
     setBusy(true);
     setError("");
@@ -144,14 +150,16 @@ export function KanbanPanel() {
         window.workbenchClient.listKanbanBoards(),
         window.workbenchClient.getGatewayStatus().catch(() => null),
       ]);
-      const nextBoard = boardSlug || boardList.find((board) => board.is_current)?.slug || boardList[0]?.slug || "";
+      const requestedBoard = boardSlug && boardList.some((board) => board.slug === boardSlug) ? boardSlug : "";
+      const nextBoard = requestedBoard || boardList.find((board) => board.is_current)?.slug || boardList[0]?.slug || "";
       setBoards(boardList);
       setActiveBoard(nextBoard);
       setGateway(gatewayStatus);
+      const taskListOptions = nextBoard ? { board: nextBoard, archived } : { archived };
       const [nextTasks, nextDiagnostics, nextAssignees] = await Promise.all([
-        nextBoard ? window.workbenchClient.listKanbanTasks({ board: nextBoard, archived: includeArchived }) : Promise.resolve([]),
-        nextBoard ? window.workbenchClient.listKanbanDiagnostics({ board: nextBoard }).catch(() => []) : Promise.resolve([]),
-        nextBoard ? window.workbenchClient.listKanbanAssignees(nextBoard).catch(() => []) : Promise.resolve([]),
+        window.workbenchClient.listKanbanTasks(taskListOptions),
+        window.workbenchClient.listKanbanDiagnostics(nextBoard ? { board: nextBoard } : {}).catch(() => []),
+        window.workbenchClient.listKanbanAssignees(nextBoard || undefined).catch(() => []),
       ]);
       setTasks(nextTasks);
       setDiagnostics(nextDiagnostics);
@@ -210,28 +218,30 @@ export function KanbanPanel() {
   }
 
   async function createTask(column: ColumnId = newTaskColumn) {
-    if (!newTaskTitle.trim() || !currentBoard) return;
+    if (!newTaskTitle.trim()) {
+      setError("请先填写任务标题。");
+      return;
+    }
+    const initialColumn = column === "triage" ? "triage" : "todo";
+    const board = selectedBoardSlug();
     await runAction(async () => {
-      const task = await window.workbenchClient.createKanbanTask({
-        board: currentBoard.slug,
+      await window.workbenchClient.createKanbanTask({
+        board,
         title: newTaskTitle.trim(),
         body: newTaskBody.trim() || undefined,
         assignee: newTaskAssignee.trim() || undefined,
         priority: newTaskPriority.trim() || undefined,
-        triage: column === "triage",
+        triage: initialColumn === "triage",
       });
-      if (column === "ready" && task.status !== "ready") {
-        await window.workbenchClient.runKanbanTaskAction({ board: currentBoard.slug, taskId: task.id, action: "unblock" }).catch(() => undefined);
-      }
       setNewTaskTitle("");
       setNewTaskBody("");
       setNewTaskPriority("");
-      await refresh(currentBoard.slug);
+      await refresh(board);
     }, "任务创建成功");
   }
 
   async function runTaskAction(task: HermesKanbanTask, action: HermesKanbanTaskAction) {
-    if (!currentBoard) return;
+    const board = selectedBoardSlug();
     const reason = action === "block" ? blockReasonById[task.id]?.trim() || "从前端看板手动阻塞" : undefined;
     const assignee = action === "assign" || action === "reassign" ? assignById[task.id]?.trim() || newTaskAssignee.trim() : undefined;
     const result = action === "edit" ? editResultById[task.id]?.trim() : action === "complete" ? "从前端看板标记完成" : undefined;
@@ -242,7 +252,7 @@ export function KanbanPanel() {
     }
     await runAction(async () => {
       await window.workbenchClient.runKanbanTaskAction({
-        board: currentBoard.slug,
+        board,
         taskId: task.id,
         action,
         reason,
@@ -254,17 +264,28 @@ export function KanbanPanel() {
       setBlockReasonById((current) => ({ ...current, [task.id]: "" }));
       setEditResultById((current) => ({ ...current, [task.id]: "" }));
       setEditSummaryById((current) => ({ ...current, [task.id]: "" }));
-      await refresh(currentBoard.slug);
+      await refresh(board);
+      if (selectedTask?.id === task.id) {
+        await loadTaskDetail(task.id);
+      }
     }, "操作成功");
   }
 
+  async function loadTaskDetail(taskId: string) {
+    const board = selectedBoardSlug();
+    const detail = await window.workbenchClient.getKanbanTask({ board, taskId });
+    setSelectedTask(detail);
+    const log = await window.workbenchClient.readKanbanTaskLog({ board, taskId, tail: 500 }).catch(() => ({ message: "" }));
+    setTaskLog(log.message);
+  }
+
   async function openTask(task: HermesKanbanTask) {
-    if (!currentBoard) return;
+    await openTaskById(task.id);
+  }
+
+  async function openTaskById(taskId: string) {
     await runAction(async () => {
-      const detail = await window.workbenchClient.getKanbanTask({ board: currentBoard.slug, taskId: task.id });
-      setSelectedTask(detail);
-      const log = await window.workbenchClient.readKanbanTaskLog({ board: currentBoard.slug, taskId: task.id, tail: 500 }).catch(() => ({ message: "" }));
-      setTaskLog(log.message);
+      await loadTaskDetail(taskId);
     }, "");
   }
 
@@ -419,8 +440,9 @@ export function KanbanPanel() {
               type="checkbox"
               checked={includeArchived}
               onChange={(event) => {
-                setIncludeArchived(event.target.checked);
-                void refresh(currentBoard?.slug);
+                const archived = event.target.checked;
+                setIncludeArchived(archived);
+                void refresh(currentBoard?.slug, archived);
               }}
             />
             显示归档
@@ -434,13 +456,11 @@ export function KanbanPanel() {
         {/* 快速创建任务 */}
         <div className="mt-3 grid gap-2 lg:grid-cols-[160px_minmax(180px,1fr)_minmax(180px,1fr)_150px_160px_auto]">
           <select className={selectClass} value={newTaskColumn} onChange={(event) => setNewTaskColumn(event.target.value as ColumnId)} title="任务初始状态">
-            {columns
-              .filter((column) => column.id !== "running" && column.id !== "done")
-              .map((column) => (
-                <option key={column.id} value={column.id}>
-                  {column.label}
-                </option>
-              ))}
+            {creatableColumns.map((column) => (
+              <option key={column.id} value={column.id}>
+                {column.label}
+              </option>
+            ))}
           </select>
           <input className={inputClass} placeholder="任务标题（必填）" value={newTaskTitle} onChange={(event) => setNewTaskTitle(event.target.value)} />
           <input className={inputClass} placeholder="任务描述 / 需求说明" value={newTaskBody} onChange={(event) => setNewTaskBody(event.target.value)} />
@@ -501,13 +521,13 @@ export function KanbanPanel() {
           onEditResultChange={(value) => setEditResultById((current) => ({ ...current, [selectedTask.id]: value }))}
           onEditSummaryChange={(value) => setEditSummaryById((current) => ({ ...current, [selectedTask.id]: value }))}
           onAction={(action) => void runTaskAction(selectedTask, action)}
-          onOpen={openTask}
+          onOpenTaskId={openTaskById}
           onClose={() => setSelectedTask(null)}
           onComment={async (text) => {
-            if (!currentBoard) return;
+            const board = selectedBoardSlug();
             await runAction(async () => {
-              await window.workbenchClient.commentKanbanTask({ board: currentBoard.slug, taskId: selectedTask.id, text });
-              const detail = await window.workbenchClient.getKanbanTask({ board: currentBoard.slug, taskId: selectedTask.id });
+              await window.workbenchClient.commentKanbanTask({ board, taskId: selectedTask.id, text });
+              const detail = await window.workbenchClient.getKanbanTask({ board, taskId: selectedTask.id });
               setSelectedTask(detail);
             }, "评论已添加");
           }}
@@ -632,6 +652,11 @@ function TaskCard(props: {
 }) {
   const { task } = props;
   const assigneeValue = props.assignById[task.id] ?? task.assignee ?? "";
+  const isArchived = task.status === "archived";
+  const isDone = task.status === "done";
+  const canAssign = !isDone && !isArchived;
+  const canBlock = !isDone && !isArchived && task.status !== "blocked";
+  const canComplete = !isDone && !isArchived;
   return (
     <article className="rounded-lg bg-white p-3 shadow-sm ring-1 ring-slate-200 transition-shadow hover:shadow-md hover:ring-indigo-200">
       <button className="block w-full text-left" onClick={() => void props.onOpen(task)} type="button">
@@ -658,7 +683,7 @@ function TaskCard(props: {
       </button>
 
       {/* 快速操作（未结束的任务才显示） */}
-      {task.status !== "done" && task.status !== "archived" ? (
+      {canAssign ? (
         <div className="mt-2 grid gap-1">
           <select
             className={smallSelectClass}
@@ -683,14 +708,14 @@ function TaskCard(props: {
       ) : null}
 
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {assigneeValue && assigneeValue !== task.assignee ? (
+        {canAssign && assigneeValue && assigneeValue !== task.assignee ? (
           <ActionButton onClick={() => props.onAction(task, "assign")} title="确认分配">分配</ActionButton>
         ) : null}
         {task.status === "blocked" ? <ActionButton onClick={() => props.onAction(task, "unblock")} title="解除阻塞">解除阻塞</ActionButton> : null}
-        {task.status !== "blocked" && task.status !== "done" ? (
+        {canBlock ? (
           <ActionButton onClick={() => props.onAction(task, "block")} title="标记为阻塞">阻塞</ActionButton>
         ) : null}
-        {task.status !== "done" ? (
+        {canComplete ? (
           <ActionButton onClick={() => props.onAction(task, "complete")} title="标记完成">
             <CheckCircle2 size={12} /> 完成
           </ActionButton>
@@ -730,11 +755,18 @@ function TaskDrawer(props: {
   onEditResultChange: (value: string) => void;
   onEditSummaryChange: (value: string) => void;
   onAction: (action: HermesKanbanTaskAction) => void;
-  onOpen: (task: HermesKanbanTask) => Promise<void>;
+  onOpenTaskId: (taskId: string) => Promise<void>;
   onClose: () => void;
   onComment?: (text: string) => Promise<void>;
 }) {
   const task = props.task;
+  const isArchived = task.status === "archived";
+  const isDone = task.status === "done";
+  const canAssign = !isDone && !isArchived;
+  const canBlock = !isDone && !isArchived && task.status !== "blocked";
+  const canUnblock = task.status === "blocked";
+  const canComplete = !isDone && !isArchived;
+  const canReclaim = task.status === "running";
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/35" onClick={props.onClose}>
       <aside
@@ -790,10 +822,7 @@ function TaskDrawer(props: {
                     <button
                       key={pid}
                       className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[11px] text-slate-700 hover:bg-slate-200"
-                      onClick={() => {
-                        const parent = props.tasks.find((t) => t.id === pid);
-                        if (parent) props.onOpen(parent);
-                      }}
+                      onClick={() => void props.onOpenTaskId(pid)}
                       type="button"
                     >
                       {pid}
@@ -808,10 +837,7 @@ function TaskDrawer(props: {
                     <button
                       key={cid}
                       className="rounded-md bg-slate-100 px-2 py-1 font-mono text-[11px] text-slate-700 hover:bg-slate-200"
-                      onClick={() => {
-                        const child = props.tasks.find((t) => t.id === cid);
-                        if (child) props.onOpen(child);
-                      }}
+                      onClick={() => void props.onOpenTaskId(cid)}
                       type="button"
                     >
                       {cid}
@@ -854,7 +880,7 @@ function TaskDrawer(props: {
               </div>
             ) : null}
             <div className="flex flex-wrap gap-2">
-              {props.assignValue && props.assignValue !== task.assignee ? (
+              {canAssign && props.assignValue && props.assignValue !== task.assignee ? (
                 <>
                   <ActionButton onClick={() => props.onAction("assign")} title="确认分配">分配</ActionButton>
                   {task.status === "running" ? (
@@ -862,16 +888,25 @@ function TaskDrawer(props: {
                   ) : null}
                 </>
               ) : null}
-              <ActionButton onClick={() => props.onAction("block")} title="标记为阻塞">阻塞</ActionButton>
-              <ActionButton onClick={() => props.onAction("unblock")} title="解除阻塞状态">解除阻塞</ActionButton>
-              <ActionButton onClick={() => props.onAction("complete")} title="标记为已完成">
-                <CheckCircle2 size={12} /> 完成
-              </ActionButton>
-              <ActionButton onClick={() => props.onAction("reclaim")} title="回收正在执行的任务">
-                <Play size={12} /> 回收
-              </ActionButton>
+              {canBlock ? <ActionButton onClick={() => props.onAction("block")} title="标记为阻塞">阻塞</ActionButton> : null}
+              {canUnblock ? <ActionButton onClick={() => props.onAction("unblock")} title="解除阻塞状态">解除阻塞</ActionButton> : null}
+              {canComplete ? (
+                <ActionButton onClick={() => props.onAction("complete")} title="标记为已完成">
+                  <CheckCircle2 size={12} /> 完成
+                </ActionButton>
+              ) : null}
+              {canReclaim ? (
+                <ActionButton onClick={() => props.onAction("reclaim")} title="回收正在执行的任务">
+                  <Play size={12} /> 回收
+                </ActionButton>
+              ) : null}
               {task.status === "triage" ? <ActionButton onClick={() => props.onAction("specify")} title="AI 自动细化需求">细化需求</ActionButton> : null}
               {task.status === "done" ? <ActionButton onClick={() => props.onAction("edit")} title="修改已完成任务的结果">编辑结果</ActionButton> : null}
+              {task.status === "done" ? (
+                <ActionButton onClick={() => props.onAction("archive")} title="归档任务">
+                  <Archive size={12} /> 归档
+                </ActionButton>
+              ) : null}
             </div>
           </section>
 

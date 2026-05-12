@@ -36,6 +36,11 @@ import { usePermissionOverview } from "../../../hooks/usePermissionOverview";
 import { buildHermesSetupViewModel, type HermesSetupAction } from "../settings/hermesSetupViewModel";
 
 type Tone = "ok" | "warn" | "danger" | "neutral";
+type InstallSourceKind = "official" | "mirror" | "custom";
+
+const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent.git";
+const OFFICIAL_HERMES_DOCS_URL = "https://hermes-agent.nousresearch.com/";
+const COMMUNITY_MIRROR_URL = "https://hermesagent.org.cn/";
 
 const RECOMMENDED_RUNTIME: HermesRuntimeConfig = {
   mode: "windows",
@@ -66,6 +71,8 @@ export function SettingsPanel(props: {
   const [installingHermes, setInstallingHermes] = useState(false);
   const [importingHermesConfig, setImportingHermesConfig] = useState(false);
   const [installEvent, setInstallEvent] = useState<HermesInstallEvent | undefined>();
+  const [installLogLines, setInstallLogLines] = useState<string[]>([]);
+  const [installLogOpen, setInstallLogOpen] = useState(false);
   const [installStartTime, setInstallStartTime] = useState<number | null>(null);
   const [testingBridge, setTestingBridge] = useState(false);
   const [bridgeTest, setBridgeTest] = useState<HermesWindowsBridgeTestResult | undefined>();
@@ -79,12 +86,15 @@ export function SettingsPanel(props: {
     if (!window.workbenchClient || typeof window.workbenchClient.onInstallHermesEvent !== "function") return;
     return window.workbenchClient.onInstallHermesEvent((event) => {
       setInstallEvent(event);
-      const isRunning = event.stage !== "completed" && event.stage !== "failed";
+      if (event.logLine) {
+        setInstallLogLines((lines) => [...lines.slice(-79), event.logLine!]);
+      }
+      const isRunning = !["completed", "failed", "cancelled"].includes(event.stage);
       setInstallingHermes(isRunning);
       if (isRunning && !installStartTime) {
         setInstallStartTime(Date.now());
       }
-      if (event.stage === "completed" || event.stage === "failed") {
+      if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
         setInstallStartTime(null);
       }
     });
@@ -173,27 +183,32 @@ export function SettingsPanel(props: {
     else store.error("打开目录失败", result.message);
   }
 
-  function handleCancelInstall() {
-    setInstallingHermes(false);
-    setInstallStartTime(null);
-    setInstallEvent(undefined);
-    store.info("安装已取消", "你可以点击「一键修复」重新安装，或前往官网手动下载安装包。");
+  async function handleCancelInstall() {
+    const result = await window.workbenchClient.cancelInstallHermes();
+    if (result.ok) store.info("正在取消安装", result.message);
+    else store.warning("取消安装", result.message);
   }
 
   async function installHermes() {
     if (installingHermes) return;
     setInstallingHermes(true);
     setInstallEvent(undefined);
+    setInstallLogLines([]);
+    setInstallLogOpen(false);
     setInstallStartTime(Date.now());
     try {
       const nextRuntime = effectiveRuntime();
       const saved = await window.workbenchClient.updateHermesConfig({ rootPath, runtime: nextRuntime });
       store.setRuntimeConfig(saved);
-      const result = await window.workbenchClient.installHermes(rootPath.trim() ? { rootPath: rootPath.trim() } : undefined);
+      const result = await window.workbenchClient.installHermes({
+        ...(rootPath.trim() ? { rootPath: rootPath.trim() } : {}),
+        source: installSourceOption(nextRuntime),
+      });
       if (result.rootPath) setRootPath(result.rootPath);
       await reloadOverview();
       await props.onRefresh();
       if (result.ok) store.success("Hermes 已准备好", result.message);
+      else if (result.message.includes("已取消")) store.info("Hermes 安装已取消", result.message);
       else store.error("Hermes 安装失败", result.message);
     } finally {
       setInstallingHermes(false);
@@ -359,12 +374,12 @@ export function SettingsPanel(props: {
           <BookOpen size={14} />
           <span>自动安装遇到问题？</span>
           <a
-            href={runtime.mode === "darwin" ? "https://hermesagent.org.cn/" : "https://hermesagent.org.cn/docs/getting-started/windows-installation"}
+            href={runtime.mode === "darwin" ? OFFICIAL_HERMES_DOCS_URL : "https://github.com/NousResearch/hermes-agent"}
             target="_blank"
             rel="noopener noreferrer"
             className="font-semibold underline hover:text-amber-800"
           >
-            {runtime.mode === "darwin" ? "查看 Hermes 官网" : "查看手动安装教程"}
+            {runtime.mode === "darwin" ? "查看 Hermes 官方文档" : "查看官方 GitHub"}
           </a>
         </div>
       ) : null}
@@ -415,8 +430,11 @@ export function SettingsPanel(props: {
           {installEvent ? (
             <InstallProgressView
               event={installEvent}
+              logLines={installLogLines}
+              logOpen={installLogOpen}
+              onToggleLog={() => setInstallLogOpen((value) => !value)}
               installStartTime={installStartTime}
-              onCancel={handleCancelInstall}
+              onCancel={() => void handleCancelInstall()}
             />
           ) : null}
         </div>
@@ -492,101 +510,11 @@ export function SettingsPanel(props: {
                 ]}
               />
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-medium text-slate-700">Hermes 源（高级）</span>
-                  <SecondaryButton
-                    icon={RotateCcw}
-                    label="重置为推荐值"
-                    onClick={() => {
-                      const next = { ...runtime, installSource: undefined };
-                      setRuntime(next);
-                      void saveRuntime(next);
-                    }}
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <AdvancedTextInput
-                    label="仓库地址"
-                    tooltip="Hermes Agent Git 仓库地址。留空则使用默认源。"
-                    value={runtime.installSource?.repoUrl ?? ""}
-                    placeholder="https://github.com/..."
-                    onChange={(value) => {
-                      const trimmed = value.trim();
-                      if (!trimmed) {
-                        setRuntime({ ...runtime, installSource: undefined });
-                        return;
-                      }
-                      setRuntime({
-                        ...runtime,
-                        installSource: {
-                          ...(runtime.installSource ?? { sourceLabel: "fork" as const }),
-                          repoUrl: trimmed,
-                        },
-                      });
-                    }}
-                  />
-                  <AdvancedTextInput
-                    label="分支"
-                    tooltip="要拉取的分支名称。留空则使用 main。"
-                    value={runtime.installSource?.branch ?? ""}
-                    placeholder="main"
-                    onChange={(value) => {
-                      if (!runtime.installSource) return;
-                      setRuntime({
-                        ...runtime,
-                        installSource: {
-                          ...runtime.installSource,
-                          branch: value.trim() || undefined,
-                        },
-                      });
-                    }}
-                  />
-                  <AdvancedTextInput
-                    label="Commit"
-                    tooltip="精确commit hash（7-40位十六进制）。留空则按分支拉取最新。"
-                    value={runtime.installSource?.commit ?? ""}
-                    placeholder="0537bad..."
-                    monospace
-                    onChange={(value) => {
-                      if (!runtime.installSource) return;
-                      setRuntime({
-                        ...runtime,
-                        installSource: {
-                          ...runtime.installSource,
-                          commit: value.trim() || undefined,
-                        },
-                      });
-                    }}
-                  />
-                  <AdvancedSelect
-                    label="源标签"
-                    tooltip="仅作标记，不影响行为。"
-                    value={runtime.installSource?.sourceLabel ?? "fork"}
-                    onChange={(value) => {
-                      if (!runtime.installSource) return;
-                      setRuntime({
-                        ...runtime,
-                        installSource: {
-                          ...runtime.installSource,
-                          sourceLabel: value as "official" | "fork" | "pinned",
-                        },
-                      });
-                    }}
-                    options={[
-                      { value: "official", label: "official" },
-                      { value: "fork", label: "fork" },
-                      { value: "pinned", label: "pinned" },
-                    ]}
-                  />
-                </div>
-                {runtime.installSource?.commit && !/^[0-9a-fA-F]{7,40}$/.test(runtime.installSource.commit) ? (
-                  <p className="mt-2 text-xs text-red-600">Commit 应为 7-40 位十六进制字符串。</p>
-                ) : null}
-                <p className="mt-2 text-xs text-slate-500">
-                  这里改完后，下次“更新 Hermes”或“一键修复”会切到新源。
-                </p>
-              </div>
+              <InstallSourceSettings
+                runtime={runtime}
+                setRuntime={setRuntime}
+                onSave={(next) => void saveRuntime(next)}
+              />
 
               {policyBlock ? <PolicyBlockedBanner block={policyBlock} /> : null}
 
@@ -619,6 +547,160 @@ function withRuntimeDefaults(runtime: HermesRuntimeConfig): HermesRuntimeConfig 
     permissionPolicy: runtime.permissionPolicy ?? "bridge_guarded",
     workerMode: runtime.workerMode ?? "off",
   };
+}
+
+function sourceKind(runtime: HermesRuntimeConfig): InstallSourceKind {
+  const label = runtime.installSource?.sourceLabel;
+  if (label === "mirror") return "mirror";
+  if (label === "custom" || label === "fork" || label === "pinned") return "custom";
+  return "official";
+}
+
+function runtimeForSourceKind(runtime: HermesRuntimeConfig, kind: InstallSourceKind): HermesRuntimeConfig {
+  if (kind === "official") {
+    return {
+      ...runtime,
+      installSource: {
+        repoUrl: OFFICIAL_HERMES_REPO_URL,
+        branch: "main",
+        sourceLabel: "official",
+      },
+    };
+  }
+  if (kind === "mirror") {
+    return {
+      ...runtime,
+      installSource: {
+        repoUrl: OFFICIAL_HERMES_REPO_URL,
+        branch: "main",
+        sourceLabel: "mirror",
+      },
+    };
+  }
+  return {
+    ...runtime,
+    installSource: {
+      repoUrl: runtime.installSource?.repoUrl && runtime.installSource.repoUrl !== OFFICIAL_HERMES_REPO_URL ? runtime.installSource.repoUrl : "",
+      branch: runtime.installSource?.branch ?? "main",
+      commit: runtime.installSource?.commit,
+      sourceLabel: "custom",
+    },
+  };
+}
+
+function installSourceOption(runtime: HermesRuntimeConfig) {
+  const kind = sourceKind(runtime);
+  if (kind === "official" || kind === "mirror") return { kind };
+  return {
+    kind: "custom" as const,
+    repoUrl: runtime.installSource?.repoUrl,
+    branch: runtime.installSource?.branch,
+    commit: runtime.installSource?.commit,
+  };
+}
+
+function InstallSourceSettings(props: {
+  runtime: HermesRuntimeConfig;
+  setRuntime: (runtime: HermesRuntimeConfig) => void;
+  onSave: (runtime: HermesRuntimeConfig) => void;
+}) {
+  const kind = sourceKind(props.runtime);
+  const custom = kind === "custom";
+  const source = props.runtime.installSource;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div>
+          <span className="text-sm font-medium text-slate-700">安装来源</span>
+          <p className="mt-0.5 text-xs text-slate-500">默认使用 Nous 官方 GitHub；国内镜像为中文社区提供，非 Nous 官方。</p>
+        </div>
+        <SecondaryButton
+          icon={RotateCcw}
+          label="恢复官方源"
+          onClick={() => {
+            const next = runtimeForSourceKind(props.runtime, "official");
+            props.setRuntime(next);
+            props.onSave(next);
+          }}
+        />
+      </div>
+      <AdvancedSelect
+        label="来源类型"
+        tooltip="官方 GitHub 最可信；国内社区镜像可在 GitHub 下载慢时手动选择；自定义仓库适合测试 fork 或指定 commit。"
+        value={kind}
+        onChange={(value) => props.setRuntime(runtimeForSourceKind(props.runtime, value as InstallSourceKind))}
+        options={[
+          { value: "official", label: "官方 GitHub（推荐）" },
+          { value: "mirror", label: "国内社区镜像（非官方）" },
+          { value: "custom", label: "自定义仓库" },
+        ]}
+      />
+      <div className="mt-2 rounded-md border border-slate-100 bg-white px-2.5 py-2 text-xs leading-5 text-slate-600">
+        {kind === "official" ? (
+          <span>安装脚本来自 GitHub Raw，仓库为 NousResearch/hermes-agent。</span>
+        ) : kind === "mirror" ? (
+          <span>安装脚本来自中文社区镜像，仓库仍对齐官方 NousResearch/hermes-agent。</span>
+        ) : (
+          <span>安装脚本仍来自官方 GitHub；安装完成后会同步到你填写的仓库/分支/commit。</span>
+        )}
+        <span className="ml-2 inline-flex gap-2">
+          <a className="font-medium text-indigo-600 hover:underline" href={OFFICIAL_HERMES_REPO_URL.replace(/\.git$/, "")} target="_blank" rel="noopener noreferrer">官方 GitHub</a>
+          <a className="font-medium text-indigo-600 hover:underline" href={OFFICIAL_HERMES_DOCS_URL} target="_blank" rel="noopener noreferrer">Nous 文档</a>
+          {kind === "mirror" ? <a className="font-medium text-slate-500 hover:underline" href={COMMUNITY_MIRROR_URL} target="_blank" rel="noopener noreferrer">中文社区镜像</a> : null}
+        </span>
+      </div>
+      {custom ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <AdvancedTextInput
+            label="仓库地址"
+            tooltip="自定义 Hermes Agent Git 仓库地址。"
+            value={source?.repoUrl ?? ""}
+            placeholder="https://github.com/your/hermes-agent.git"
+            onChange={(value) => props.setRuntime({
+              ...props.runtime,
+              installSource: {
+                ...(source ?? { sourceLabel: "custom" as const }),
+                repoUrl: value.trim(),
+                sourceLabel: "custom",
+              },
+            })}
+          />
+          <AdvancedTextInput
+            label="分支"
+            tooltip="要同步的分支名称。留空则使用 main。"
+            value={source?.branch ?? ""}
+            placeholder="main"
+            onChange={(value) => props.setRuntime({
+              ...props.runtime,
+              installSource: {
+                ...(source ?? { repoUrl: "", sourceLabel: "custom" as const }),
+                branch: value.trim() || undefined,
+                sourceLabel: "custom",
+              },
+            })}
+          />
+          <AdvancedTextInput
+            label="Commit"
+            tooltip="精确 commit hash（7-40 位十六进制）。留空则按分支同步。"
+            value={source?.commit ?? ""}
+            placeholder="0537bad..."
+            monospace
+            onChange={(value) => props.setRuntime({
+              ...props.runtime,
+              installSource: {
+                ...(source ?? { repoUrl: "", sourceLabel: "custom" as const }),
+                commit: value.trim() || undefined,
+                sourceLabel: "custom",
+              },
+            })}
+          />
+          {source?.commit && !/^[0-9a-fA-F]{7,40}$/.test(source.commit) ? (
+            <p className="self-end text-xs text-red-600">Commit 应为 7-40 位十六进制字符串。</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function runtimeLabel(mode?: HermesRuntimeConfig["mode"]) {
@@ -822,19 +904,27 @@ function MenuButton(props: { label: string; onClick: () => void; loading?: boole
 
 function InstallProgressView(props: {
   event: HermesInstallEvent;
+  logLines: string[];
+  logOpen: boolean;
+  onToggleLog: () => void;
   installStartTime?: number | null;
   onCancel?: () => void;
 }) {
   const progress = Math.max(0, Math.min(100, props.event.progress));
-  const isRunning = props.event.stage !== "completed" && props.event.stage !== "failed";
+  const isRunning = !["completed", "failed", "cancelled"].includes(props.event.stage);
   const elapsedMs = props.installStartTime ? Date.now() - props.installStartTime : 0;
-  const stuckAt55 = progress === 55 && elapsedMs > 60_000;
+  const slowInstall = elapsedMs > 120_000 || (props.event.elapsedSeconds ?? 0) > 120;
+  const latestLines = props.logLines.slice(-6);
 
   function stageLabel() {
+    if (props.event.stage === "cancelled") return "已取消";
+    if (props.event.stage === "downloading_script") return "下载安装脚本";
+    if (props.event.stage === "running_installer") return "执行安装脚本";
+    if (props.event.stage === "health_check") return "健康检查";
     if (progress <= 12) return "环境预检";
     if (progress <= 32) return "下载安装脚本";
-    if (progress <= 62) return "执行官方安装脚本";
-    if (progress <= 82) return "健康检查";
+    if (progress <= 70) return "执行安装脚本";
+    if (progress <= 90) return "健康检查";
     return "完成";
   }
 
@@ -844,6 +934,11 @@ function InstallProgressView(props: {
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-800">{props.event.message}</p>
           {props.event.detail ? <p className="mt-0.5 break-words text-xs text-slate-500">{props.event.detail}</p> : null}
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+            {props.event.sourceLabel ? <span>来源：{sourceLabelText(props.event.sourceLabel)}</span> : null}
+            {props.event.elapsedSeconds ? <span>已运行 {props.event.elapsedSeconds} 秒</span> : null}
+            {props.event.diagnosticCode ? <span>诊断：{props.event.diagnosticCode}</span> : null}
+          </div>
         </div>
         <span className="shrink-0 rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-600">{Math.round(progress)}%</span>
       </div>
@@ -853,11 +948,26 @@ function InstallProgressView(props: {
         </div>
         <span className="shrink-0">{stageLabel()}</span>
       </div>
-      {stuckAt55 ? (
+      {latestLines.length ? (
+        <div className="mt-2 rounded-md border border-slate-100 bg-white px-2.5 py-2">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between text-left text-[11px] font-medium text-slate-600"
+            onClick={props.onToggleLog}
+          >
+            <span>实时日志</span>
+            <span>{props.logOpen ? "收起" : "展开"}</span>
+          </button>
+          <pre className="mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-slate-500">
+            {(props.logOpen ? props.logLines : latestLines).join("\n")}
+          </pre>
+        </div>
+      ) : null}
+      {slowInstall && isRunning ? (
         <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-2.5 py-2">
-          <p className="text-[11px] font-medium text-amber-800">为什么卡在 55%？</p>
+          <p className="text-[11px] font-medium text-amber-800">安装脚本运行时间较长</p>
           <p className="mt-0.5 text-[11px] leading-4 text-amber-700">
-            此阶段是 Hermes 官方 PowerShell 安装脚本在后台下载依赖包。如果网络较慢或企业防火墙限制了脚本执行，可能会长时间停留。你可以继续等待，也可以取消后前往官网手动下载。
+            这通常发生在下载 GitHub 仓库、uv/Python 依赖或 winget 系统依赖时。可以展开日志定位阻塞项；如果是 GitHub 网络较慢，可以取消后在安装来源里切换国内社区镜像。
           </p>
         </div>
       ) : null}
@@ -871,17 +981,24 @@ function InstallProgressView(props: {
             <X size={12} /> 取消安装
           </button>
           <a
-            href="https://hermesagent.org.cn/"
+            href={OFFICIAL_HERMES_DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-[11px] text-indigo-600 hover:text-indigo-700 hover:underline"
           >
-            <ExternalLink size={11} /> 前往 Hermes 官网下载安装包
+            <ExternalLink size={11} /> 查看 Nous 官方文档
           </a>
         </div>
       ) : null}
     </div>
   );
+}
+
+function sourceLabelText(label: NonNullable<HermesInstallEvent["sourceLabel"]>) {
+  if (label === "official") return "官方 GitHub";
+  if (label === "mirror") return "国内社区镜像";
+  if (label === "custom" || label === "fork") return "自定义仓库";
+  return "固定版本";
 }
 
 function PolicyBlockedBanner(props: { block: PermissionOverviewBlockReason }) {

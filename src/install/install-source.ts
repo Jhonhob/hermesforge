@@ -1,6 +1,6 @@
 import type { RuntimeConfig } from "../shared/types";
 
-export type InstallSourceLabel = "official" | "fork" | "pinned";
+export type InstallSourceLabel = "official" | "mirror" | "custom" | "fork" | "pinned";
 
 export interface InstallSource {
   repoUrl: string;
@@ -8,6 +8,10 @@ export interface InstallSource {
   commit?: string;
   sourceLabel: InstallSourceLabel;
 }
+
+export type InstallSourceOption =
+  | { kind: "official" | "mirror"; repoUrl?: string; branch?: string; commit?: string }
+  | { kind: "custom"; repoUrl?: string; branch?: string; commit?: string };
 
 export interface RepoSyncStep {
   program: string;
@@ -83,15 +87,41 @@ export function resolveInstallSource(config: RuntimeConfig): InstallSource {
       repoUrl: configured.repoUrl.trim(),
       branch: configured.branch?.trim() || undefined,
       commit: configured.commit?.trim() || undefined,
-      sourceLabel: configured.sourceLabel ?? "fork",
+      sourceLabel: normalizeSourceLabel(configured.sourceLabel),
     };
   }
   const envOverride = process.env.HERMES_INSTALL_REPO_URL?.trim();
   if (envOverride) {
     return {
       repoUrl: envOverride,
-      sourceLabel: "fork",
+      sourceLabel: "custom",
     };
   }
   return DEFAULT_PINNED_HERMES_SOURCE;
+}
+
+export function resolveInstallSourceFromOption(config: RuntimeConfig, option?: InstallSourceOption): InstallSource {
+  if (!option) return resolveInstallSource(config);
+  if (option.kind === "official" || option.kind === "mirror") {
+    return {
+      ...DEFAULT_PINNED_HERMES_SOURCE,
+      branch: option.branch?.trim() || DEFAULT_PINNED_HERMES_SOURCE.branch,
+      commit: option.commit?.trim() || undefined,
+      sourceLabel: option.kind,
+    };
+  }
+  const repoUrl = option.repoUrl?.trim();
+  if (!repoUrl) return resolveInstallSource(config);
+  return {
+    repoUrl,
+    branch: option.branch?.trim() || undefined,
+    commit: option.commit?.trim() || undefined,
+    sourceLabel: "custom",
+  };
+}
+
+export function normalizeSourceLabel(label?: string): InstallSourceLabel {
+  if (label === "official" || label === "mirror" || label === "custom" || label === "pinned") return label;
+  if (label === "fork") return "custom";
+  return "custom";
 }

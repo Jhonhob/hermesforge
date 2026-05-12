@@ -223,7 +223,8 @@ declare global {
       checkClientUpdate(): Promise<ClientUpdateEvent>;
       onClientUpdateEvent(callback: (event: ClientUpdateEvent) => void): () => void;
       updateHermes(): Promise<EngineMaintenanceResult>;
-      installHermes(options?: { rootPath?: string }): Promise<HermesInstallResult>;
+      installHermes(options?: { rootPath?: string; source?: { kind: "official" | "mirror" | "custom"; repoUrl?: string; branch?: string; commit?: string } }): Promise<HermesInstallResult>;
+      cancelInstallHermes(): Promise<{ ok: boolean; message: string }>;
       repairSetupDependency(id: SetupDependencyRepairId): Promise<SetupDependencyRepairResult>;
       onInstallHermesEvent(callback: (event: HermesInstallEvent) => void): () => void;
       getRuntimeConfig(): Promise<RuntimeConfig>;

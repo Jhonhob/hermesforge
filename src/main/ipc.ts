@@ -98,6 +98,12 @@ const attachmentSourcePathsSchema = z.array(workspacePathInputSchema).max(12);
 const setupDependencyRepairIdSchema = z.enum(["git", "python", "hermes_pyyaml", "hermes_python_dotenv", "weixin_aiohttp"]);
 const installHermesOptionsSchema = z.object({
   rootPath: z.string().trim().min(1).max(1000).optional(),
+  source: z.object({
+    kind: z.enum(["official", "mirror", "custom"]),
+    repoUrl: z.string().trim().url().optional(),
+    branch: z.string().trim().max(200).optional(),
+    commit: z.string().trim().regex(/^[0-9a-fA-F]{7,40}$/).optional(),
+  }).optional(),
 }).optional();
 const legacyWslMigrationImportOptionsSchema = z.object({
   sourcePath: z.string().trim().min(1).max(1000).optional(),
@@ -622,6 +628,7 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
       event.sender.send(IpcChannels.installHermesEvent, payload);
     }, installHermesOptionsSchema.parse(input ?? undefined)),
   );
+  ipcMain.handle(IpcChannels.cancelInstallHermes, () => services.setupService.cancelInstallHermes());
   ipcMain.handle(IpcChannels.repairSetupDependency, (_event, id: unknown) =>
     services.setupService.repairDependency(setupDependencyRepairIdSchema.parse(id)),
   );
