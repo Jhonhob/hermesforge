@@ -4,6 +4,7 @@ import type { ClientUpdateEvent, SessionMetaPatch } from "../../../shared/types"
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
 import { StatusBar } from "./StatusBar";
+import { UpdateDialog } from "./UpdateDialog";
 
 export function HermesHeader(props: {
   onRenameSession: (title: string) => void;
@@ -26,6 +27,9 @@ export function HermesHeader(props: {
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateEvent | undefined>();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [restartingHermes, setRestartingHermes] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateDialogPhase, setUpdateDialogPhase] = useState<"available" | "downloaded">("available");
+  const [dialogEvent, setDialogEvent] = useState<ClientUpdateEvent | undefined>();
   const menuRef = useRef<HTMLDivElement>(null);
   const activeSession = store.sessions.find((session) => session.id === store.activeSessionId);
 
@@ -46,6 +50,17 @@ export function HermesHeader(props: {
     return window.workbenchClient.onClientUpdateEvent((event) => {
       setClientUpdate(event);
       setCheckingUpdate(event.status === "checking" || event.status === "downloading");
+
+      if (event.status === "available") {
+        setDialogEvent(event);
+        setUpdateDialogPhase("available");
+        setUpdateDialogOpen(true);
+      } else if (event.status === "downloaded") {
+        setDialogEvent(event);
+        setUpdateDialogPhase("downloaded");
+        setUpdateDialogOpen(true);
+      }
+
       const feedback = useAppStore.getState();
       if (event.status === "downloaded") {
         feedback.success("更新已下载", event.message);
@@ -54,6 +69,7 @@ export function HermesHeader(props: {
       } else if (event.status === "error") {
         feedback.error("检查更新失败", event.message);
       }
+      // skipped: 不弹窗也不 toast
     });
   }, []);
 
@@ -84,17 +100,35 @@ export function HermesHeader(props: {
       const feedback = useAppStore.getState();
       if (event.status === "not-available") {
         feedback.success("已是最新版本", event.message);
-      } else if (event.status === "available" || event.status === "downloading") {
-        feedback.info("发现更新", event.message);
-      } else if (event.status === "downloaded") {
-        feedback.success("更新已下载", event.message);
       } else if (event.status === "error") {
         feedback.error("检查更新失败", event.message);
       }
+      // available / downloaded 由 onClientUpdateEvent 弹窗展示，不再重复 toast
     } catch (error) {
       useAppStore.getState().error("检查更新失败", error instanceof Error ? error.message : "未知错误");
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function handleDownloadUpdate() {
+    setUpdateDialogOpen(false);
+    if (window.workbenchClient && typeof window.workbenchClient.downloadClientUpdate === "function") {
+      await window.workbenchClient.downloadClientUpdate();
+    }
+  }
+
+  async function handleInstallUpdate() {
+    setUpdateDialogOpen(false);
+    if (window.workbenchClient && typeof window.workbenchClient.installClientUpdate === "function") {
+      await window.workbenchClient.installClientUpdate();
+    }
+  }
+
+  async function handleSkipUpdate() {
+    setUpdateDialogOpen(false);
+    if (window.workbenchClient && typeof window.workbenchClient.skipClientUpdate === "function" && dialogEvent?.latestVersion) {
+      await window.workbenchClient.skipClientUpdate(dialogEvent.latestVersion);
     }
   }
 
@@ -359,6 +393,16 @@ export function HermesHeader(props: {
           ) : null}
         </div>
       </div>
+
+      <UpdateDialog
+        open={updateDialogOpen}
+        phase={updateDialogPhase}
+        event={dialogEvent}
+        onClose={() => setUpdateDialogOpen(false)}
+        onDownload={handleDownloadUpdate}
+        onInstall={handleInstallUpdate}
+        onSkip={handleSkipUpdate}
+      />
     </header>
   );
 }

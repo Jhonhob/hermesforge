@@ -617,6 +617,18 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
   });
 
   ipcMain.handle(IpcChannels.checkClientUpdate, () => services.clientAutoUpdateService.checkForUpdates(true));
+  ipcMain.handle(IpcChannels.downloadClientUpdate, () => {
+    services.clientAutoUpdateService.downloadUpdate();
+    return { ok: true };
+  });
+  ipcMain.handle(IpcChannels.installClientUpdate, () => {
+    services.clientAutoUpdateService.installUpdate();
+    return { ok: true };
+  });
+  ipcMain.handle(IpcChannels.skipClientUpdate, (_event, version: string) => {
+    services.clientAutoUpdateService.skipVersion(version);
+    return { ok: true };
+  });
 
   ipcMain.handle(IpcChannels.updateHermes, (event) =>
     services.setupService.updateHermes((payload) => {

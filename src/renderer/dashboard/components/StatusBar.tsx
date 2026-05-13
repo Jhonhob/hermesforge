@@ -193,6 +193,7 @@ function updateShortLabel(event?: ClientUpdateEvent) {
   if (event.status === "available") return "新版本";
   if (event.status === "downloading") return `${Math.round(event.percent ?? 0)}%`;
   if (event.status === "downloaded") return "待重启";
+  if (event.status === "skipped") return "已跳过";
   if (event.status === "checking") return "检查中";
   if (event.status === "error") return "更新异常";
   return "已最新";
@@ -208,6 +209,7 @@ function updateTone(event?: ClientUpdateEvent): BadgeTone {
   if (event?.status === "available" || event?.status === "downloaded") return "ok";
   if (event?.status === "checking" || event?.status === "downloading") return "warn";
   if (event?.status === "error") return "error";
+  if (event?.status === "skipped") return "idle";
   return "idle";
 }
 

@@ -221,6 +221,9 @@ declare global {
       probeHermes(workspacePath?: string): Promise<EngineWarmupResult>;
       checkUpdates(): Promise<EngineUpdateStatus[]>;
       checkClientUpdate(): Promise<ClientUpdateEvent>;
+      downloadClientUpdate(): Promise<{ ok: boolean }>;
+      installClientUpdate(): Promise<{ ok: boolean }>;
+      skipClientUpdate(version: string): Promise<{ ok: boolean }>;
       onClientUpdateEvent(callback: (event: ClientUpdateEvent) => void): () => void;
       updateHermes(): Promise<EngineMaintenanceResult>;
       installHermes(options?: { rootPath?: string; source?: { kind: "official" | "mirror" | "custom"; repoUrl?: string; branch?: string; commit?: string } }): Promise<HermesInstallResult>;

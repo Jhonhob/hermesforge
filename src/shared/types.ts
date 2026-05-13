@@ -947,6 +947,7 @@ export type ClientUpdateStatus =
   | "not-available"
   | "downloading"
   | "downloaded"
+  | "skipped"
   | "error";
 
 export type ClientUpdateEvent = {
@@ -954,6 +955,7 @@ export type ClientUpdateEvent = {
   message: string;
   currentVersion?: string;
   latestVersion?: string;
+  releaseNotes?: string;
   percent?: number;
   bytesPerSecond?: number;
   transferred?: number;

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow } from "electron";
 import { autoUpdater } from "electron-updater";
-import type { ProgressInfo, UpdateInfo } from "electron-updater";
+import type { UpdateInfo } from "electron-updater";
 import { IpcChannels } from "../shared/ipc";
 import type { ClientUpdateEvent } from "../shared/types";
 
@@ -8,6 +8,8 @@ export class ClientAutoUpdateService {
   private lastEvent: ClientUpdateEvent;
   private checking = false;
   private startupCheckScheduled = false;
+  private pendingUpdateInfo: UpdateInfo | null = null;
+  private skippedVersion: string | null = null;
 
   constructor(private readonly getMainWindow: () => BrowserWindow | undefined) {
     this.lastEvent = this.event("idle", "自动更新已就绪。");
@@ -31,7 +33,7 @@ export class ClientAutoUpdateService {
       this.publish(this.event("checking", manual ? "正在手动检查客户端更新..." : "正在后台检查客户端更新...", { manual }));
       const timedOut = Symbol("update-check-timeout");
       const result = await Promise.race([
-        autoUpdater.checkForUpdatesAndNotify().then(() => undefined),
+        autoUpdater.checkForUpdates().then(() => undefined),
         delay(35_000).then(() => timedOut),
       ]);
       if (result === timedOut) {
@@ -51,8 +53,22 @@ export class ClientAutoUpdateService {
     return this.lastEvent;
   }
 
+  downloadUpdate() {
+    if (!this.pendingUpdateInfo) return;
+    void autoUpdater.downloadUpdate();
+  }
+
+  installUpdate() {
+    autoUpdater.quitAndInstall(false, true);
+  }
+
+  skipVersion(version: string) {
+    this.skippedVersion = version;
+    this.publish(this.event("skipped", `已跳过版本 ${version}。`, { latestVersion: version }));
+  }
+
   private configure() {
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
 
     autoUpdater.on("checking-for-update", () => {
@@ -60,12 +76,22 @@ export class ClientAutoUpdateService {
     });
 
     autoUpdater.on("update-available", (info) => {
-      this.publish(this.event("available", `发现新版本 ${info.version}，正在后台下载。`, {
+      this.pendingUpdateInfo = info;
+      if (this.skippedVersion === info.version) {
+        this.publish(this.event("skipped", `版本 ${info.version} 已跳过。`, {
+          latestVersion: info.version,
+          releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : undefined,
+        }));
+        return;
+      }
+      this.publish(this.event("available", `发现新版本 ${info.version}。`, {
         latestVersion: info.version,
+        releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : undefined,
       }));
     });
 
     autoUpdater.on("update-not-available", (info) => {
+      this.pendingUpdateInfo = null;
       this.publish(this.event("not-available", "当前已经是最新版本。", {
         latestVersion: info.version,
       }));
@@ -83,25 +109,15 @@ export class ClientAutoUpdateService {
     autoUpdater.on("update-downloaded", (info) => {
       this.publish(this.event("downloaded", `新版本 ${info.version} 已准备就绪。`, {
         latestVersion: info.version,
+        releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : undefined,
         percent: 100,
       }));
-      void this.promptRestart(info);
     });
 
     autoUpdater.on("error", (error) => {
       const message = error instanceof Error ? error.message : String(error);
       this.publish(this.event("error", `自动更新失败：${message}`));
     });
-  }
-
-  private async promptRestart(info: UpdateInfo) {
-    const owner = this.getMainWindow();
-    const result = owner
-      ? await dialog.showMessageBox(owner, restartDialogOptions(info.version))
-      : await dialog.showMessageBox(restartDialogOptions(info.version));
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall(false, true);
-    }
   }
 
   private event(
@@ -128,16 +144,4 @@ export class ClientAutoUpdateService {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function restartDialogOptions(version: string) {
-  return {
-    type: "info" as const,
-    buttons: ["立即重启更新", "稍后"],
-    defaultId: 0,
-    cancelId: 1,
-    title: "Hermes Forge 更新已下载",
-    message: `新版本 ${version} 已准备就绪，是否立即重启应用完成更新？`,
-    detail: "如果选择稍后，更新会在下次退出应用时自动安装。",
-  };
 }

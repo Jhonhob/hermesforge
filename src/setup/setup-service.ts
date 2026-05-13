@@ -6,7 +6,7 @@ import type { AppPaths } from "../main/app-paths";
 import type { RuntimeConfigStore } from "../main/runtime-config";
 import type { EngineAdapter } from "../adapters/engine-adapter";
 import type { SecretVault } from "../auth/secret-vault";
-import { runCommand } from "../process/command-runner";
+import { runCommand, streamCommand } from "../process/command-runner";
 import type {
   EngineMaintenanceResult,
   HermesCompatibilityReport,
@@ -454,7 +454,7 @@ export class SetupService {
     const logDir = path.join(this.appPaths.baseDir(), "diagnostics", "install-logs");
     const logPath = path.join(logDir, `hermes-install-${startedAt.replace(/[:.]/g, "-")}.log`);
 
-    const emit = (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string) => {
+    const emit = (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string, extra?: Partial<HermesInstallEvent>) => {
       const line = `[${stage}] ${message}${detail ? ` | ${detail}` : ""}`;
       log.push(line);
       publish?.({
@@ -464,6 +464,7 @@ export class SetupService {
         progress,
         startedAt,
         at: new Date().toISOString(),
+        ...extra,
       });
     };
 
@@ -549,6 +550,7 @@ export class SetupService {
         const clone = await this.runLogged("git", ["clone", "--depth", "1", repoUrl, stagingPath], parentDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
           heartbeatMs: 15_000,
           onHeartbeat: (elapsedSeconds) => emit("cloning", 34, "仍在下载 Hermes 核心文件，请保持网络连接。", `已等待 ${elapsedSeconds} 秒，源：${repoUrl}`),
+          onLine: (line) => emit("cloning", 34, "正在下载...", line, { logLine: line }),
         });
         if (clone.exitCode !== 0) {
           await this.cleanupDirectory(stagingPath, log);
@@ -944,12 +946,22 @@ export class SetupService {
     rootPath: string,
     log: string[],
     python: PythonLauncher,
-    emit?: (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string) => void,
+    emit?: (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string, extra?: Partial<HermesInstallEvent>) => void,
   ) {
+    const mirror = await this.detectPipMirror(log);
+    const pipArgs = (baseArgs: string[]) => {
+      if (mirror) {
+        log.push(`Using pip mirror: ${mirror}`);
+        return [...baseArgs, "-i", mirror];
+      }
+      return baseArgs;
+    };
+
     if (await this.exists(path.join(rootPath, "pyproject.toml"))) {
-      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", ...pipArgs(["install", "-e", "."])], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${mirror ? "，国内镜像：" + mirror : ""}`),
+        onLine: (line) => emit?.("installing_dependencies", 68, "正在安装依赖...", line, { logLine: line }),
       });
       if (result.exitCode !== 0) {
         log.push("Editable pip install failed; continuing to health check so the user gets a precise runtime error.");
@@ -957,14 +969,55 @@ export class SetupService {
       return;
     }
     if (await this.exists(path.join(rootPath, "requirements.txt"))) {
-      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-r", "requirements.txt"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", ...pipArgs(["install", "-r", "requirements.txt"])], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${mirror ? "，国内镜像：" + mirror : ""}`),
+        onLine: (line) => emit?.("installing_dependencies", 68, "正在安装依赖...", line, { logLine: line }),
       });
       if (result.exitCode !== 0) {
         log.push("requirements.txt pip install failed; continuing to health check so the user gets a precise runtime error.");
       }
     }
+  }
+
+  private async detectPipMirror(log: string[]): Promise<string | undefined> {
+    const mirrors = [
+      { url: "https://pypi.tuna.tsinghua.edu.cn/simple", label: "清华" },
+      { url: "https://mirrors.aliyun.com/pypi/simple", label: "阿里云" },
+      { url: "https://pypi.mirrors.ustc.edu.cn/simple", label: "中科大" },
+    ];
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const start = Date.now();
+      await fetch("https://pypi.org/simple/", { method: "HEAD", signal: controller.signal });
+      clearTimeout(timer);
+      const elapsed = Date.now() - start;
+      if (elapsed < 2000) {
+        log.push(`PyPI official is fast (${elapsed}ms), using default index.`);
+        return undefined;
+      }
+      log.push(`PyPI official is slow (${elapsed}ms), probing mirrors...`);
+    } catch {
+      log.push("PyPI official is unreachable, probing mirrors...");
+    }
+
+    for (const mirror of mirrors) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const start = Date.now();
+        await fetch(mirror.url, { method: "HEAD", signal: controller.signal });
+        clearTimeout(timer);
+        const elapsed = Date.now() - start;
+        log.push(`Mirror ${mirror.label} is available (${elapsed}ms).`);
+        return mirror.url;
+      } catch {
+        log.push(`Mirror ${mirror.label} probe failed.`);
+      }
+    }
+    log.push("All mirrors unreachable, falling back to default index.");
+    return undefined;
   }
 
   private async saveHermesRoot(rootPath: string) {
@@ -998,7 +1051,7 @@ export class SetupService {
     cwd: string,
     log: string[],
     timeoutMs: number,
-    heartbeat?: { heartbeatMs: number; onHeartbeat: (elapsedSeconds: number) => void },
+    heartbeat?: { heartbeatMs: number; onHeartbeat: (elapsedSeconds: number) => void; onLine?: (line: string) => void },
   ) {
     log.push(`$ ${command} ${args.join(" ")}`);
     const startedAt = Date.now();
@@ -1009,14 +1062,35 @@ export class SetupService {
           heartbeat.onHeartbeat(elapsedSeconds);
         }, heartbeat.heartbeatMs)
       : undefined;
-    const result = await runCommand(command, args, { cwd, timeoutMs });
-    if (timer) {
-      clearInterval(timer);
+    try {
+      if (!heartbeat?.onLine) {
+        const result = await runCommand(command, args, { cwd, timeoutMs });
+        if (result.stdout.trim()) log.push(result.stdout.trim());
+        if (result.stderr.trim()) log.push(result.stderr.trim());
+        log.push(`exit ${result.exitCode ?? "unknown"}`);
+        return result;
+      }
+
+      let stdout = "";
+      let stderr = "";
+      let exitCode: number | null = null;
+      for await (const event of streamCommand(command, args, { cwd, timeoutMs })) {
+        if (event.type === "stdout" || event.type === "stderr") {
+          const line = event.line.trim();
+          if (!line) continue;
+          if (event.type === "stdout") stdout += `${line}\n`;
+          else stderr += `${line}\n`;
+          log.push(line);
+          heartbeat.onLine(line);
+        } else {
+          exitCode = event.exitCode;
+        }
+      }
+      log.push(`exit ${exitCode ?? "unknown"}`);
+      return { exitCode, stdout, stderr };
+    } finally {
+      if (timer) clearInterval(timer);
     }
-    if (result.stdout.trim()) log.push(result.stdout.trim());
-    if (result.stderr.trim()) log.push(result.stderr.trim());
-    log.push(`exit ${result.exitCode ?? "unknown"}`);
-    return result;
   }
 
   private async checkCommand(

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Sparkles, CheckCircle2, AlertCircle, Loader2, ArrowRight, Settings, HelpCircle, Wrench, BookOpen, X, ExternalLink } from "lucide-react";
+import { Sparkles, CheckCircle2, AlertCircle, Loader2, ArrowRight, Settings, HelpCircle, Wrench, BookOpen, X, ExternalLink, Terminal, ChevronDown, ChevronUp, Globe } from "lucide-react";
 import { useAppStore } from "../store";
 import type { HermesInstallEvent, SetupCheck, SetupDependencyRepairId } from "../../shared/types";
 
@@ -16,9 +16,13 @@ export function WelcomePage(props: { onComplete: () => void }) {
   const [setupChecks, setSetupChecks] = useState<SetupCheck[]>([]);
   const [repairingDependency, setRepairingDependency] = useState<SetupDependencyRepairId | undefined>();
   const [installStartTime, setInstallStartTime] = useState<number | null>(null);
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [networkHint, setNetworkHint] = useState<string | null>(null);
   const [macRuntime, setMacRuntime] = useState(false);
   const autoInstallAttemptedRef = useRef(false);
   const installRunningRef = useRef(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const unsubscribe = window.workbenchClient?.onInstallHermesEvent?.((event) => {
@@ -101,9 +105,15 @@ export function WelcomePage(props: { onComplete: () => void }) {
     const isRunning = event.stage !== "completed" && event.stage !== "failed" && event.stage !== "cancelled";
     installRunningRef.current = isRunning;
     setStatus(event.stage === "completed" ? "found" : event.stage === "failed" || event.stage === "cancelled" ? "not-found" : "installing");
-    setProgress(Math.max(0, Math.min(100, event.progress)));
+    setProgress((current) => Math.max(current, Math.min(100, event.progress)));
     setMessage(event.message);
     setDetail(event.detail ?? "");
+    if (event.logLine) {
+      setInstallLogs((prev) => {
+        const next = [...prev, event.logLine!];
+        return next.length > 200 ? next.slice(next.length - 200) : next;
+      });
+    }
     if (isRunning && !installStartTime) {
       setInstallStartTime(Date.now());
     }
@@ -112,6 +122,12 @@ export function WelcomePage(props: { onComplete: () => void }) {
       void refreshSetupChecks();
     }
   }
+
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [installLogs, showLogs]);
 
   async function refreshSetupChecks() {
     try {
@@ -197,6 +213,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
     setProgress(0);
     setMessage(result.ok ? "正在取消安装" : "取消安装");
     setDetail(result.ok ? result.message : "当前没有可取消的安装进程。你可以重新自动安装，或查看官方文档手动配置路径。");
+    setInstallLogs((prev) => [...prev, `[cancelled] ${result.message}`]);
   }
 
   function handleManualConfig() {
@@ -337,14 +354,40 @@ export function WelcomePage(props: { onComplete: () => void }) {
                 <span>·</span>
                 <span>{installStageLabel(progress)}</span>
               </div>
-              {progress === 55 && installStartTime && Date.now() - installStartTime > 60_000 ? (
+              {networkHint ? (
                 <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-left">
-                  <p className="text-[11px] font-medium text-amber-800">为什么卡在 55%？</p>
-                  <p className="mt-1 text-[11px] leading-4 text-amber-700">
-                    此阶段是 Hermes PowerShell 安装脚本在后台下载依赖包。如果网络较慢或企业防火墙限制了 PowerShell 脚本执行，可能会长时间停留。可以继续等待，也可以取消后在设置中心切换国内社区镜像重试。
-                  </p>
+                  <div className="flex items-start gap-2">
+                    <Globe size={14} className="mt-0.5 shrink-0 text-amber-600" />
+                    <div>
+                      <p className="text-[11px] font-medium text-amber-800">网络提示</p>
+                      <p className="mt-1 text-[11px] leading-4 text-amber-700">{networkHint}</p>
+                    </div>
+                  </div>
                 </div>
               ) : null}
+              {installLogs.length > 0 && (
+                <div className="mt-3 text-left">
+                  <button
+                    onClick={() => setShowLogs((v) => !v)}
+                    className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-500 transition hover:text-slate-700"
+                    type="button"
+                  >
+                    <Terminal size={12} />
+                    {showLogs ? "收起实时日志" : `查看实时日志 (${installLogs.length} 行)`}
+                    {showLogs ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  </button>
+                  {showLogs && (
+                    <div className="mt-2 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-900 px-3 py-2">
+                      <pre className="text-[10px] leading-4 text-slate-300">
+                        <code>
+                          {installLogs.join("\n")}
+                          <div ref={logsEndRef} />
+                        </code>
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="mt-4 flex flex-col gap-2">
                 <button
                   className="mx-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
@@ -450,6 +493,37 @@ function installStageLabel(progress: number) {
   if (progress <= 62) return "执行安装脚本";
   if (progress <= 82) return "健康检查";
   return "完成";
+}
+
+async function detectSlowNetwork(): Promise<string | null> {
+  const hints: string[] = [];
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const start = Date.now();
+    await fetch("https://pypi.org/simple/", { method: "HEAD", signal: controller.signal, mode: "no-cors" });
+    const elapsed = Date.now() - start;
+    clearTimeout(timer);
+    if (elapsed > 3000) {
+      hints.push("检测到 PyPI 访问较慢（" + elapsed + "ms），建议在设置中心切换国内社区镜像，或手动设置 pip 国内源后重试。");
+    }
+  } catch {
+    hints.push("检测到 PyPI 无法访问，可能是网络受限。建议在设置中心切换国内社区镜像，或手动配置 pip 国内源。");
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const start = Date.now();
+    await fetch("https://github.com/NousResearch/hermes-agent", { method: "HEAD", signal: controller.signal, mode: "no-cors" });
+    const elapsed = Date.now() - start;
+    clearTimeout(timer);
+    if (elapsed > 3000) {
+      hints.push("检测到 GitHub 访问较慢（" + elapsed + "ms），安装脚本下载可能需要更长时间。");
+    }
+  } catch {
+    hints.push("检测到 GitHub 无法访问，安装脚本可能下载失败。建议在设置中心切换国内社区镜像。");
+  }
+  return hints.length > 0 ? hints.join(" ") : null;
 }
 
 function ManualInstallGuide(props: { defaultOpen?: boolean }) {

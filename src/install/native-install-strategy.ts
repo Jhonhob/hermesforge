@@ -388,7 +388,24 @@ export class NativeInstallStrategy implements InstallStrategy {
       }
 
       this.throwIfAborted(signal);
-      emit("downloading_script", 20, "正在下载 Hermes Windows 安装脚本。", installerUrls[0], { sourceUrl: installerUrls[0] });
+
+      const githubSlow = await this.isGithubSlow(log);
+      if (githubSlow) {
+        emit("preflight", 10, "检测到 GitHub 访问较慢，建议切换国内社区镜像后重试。", "如果继续安装，脚本从 GitHub 下载依赖可能会耗时较长。可在设置中心切换安装来源为国内社区镜像，或取消后手动安装 Hermes。", { sourceUrl: installerUrls[0] });
+      }
+
+      emit("preflight", 12, "正在检查系统依赖（Git / Python）。", "如果缺失将通过 winget 自动安装，避免安装脚本在后台长时间下载。");
+      const gitReady = await this.ensureGitAvailable(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
+      if (!gitReady.ok) {
+        return await finish({ ok: false, rootPath, message: gitReady.message }, "failed");
+      }
+      const pythonReady = await this.ensurePythonAvailable(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
+      if (!pythonReady.ok) {
+        return await finish({ ok: false, rootPath, message: pythonReady.message }, "failed");
+      }
+
+      this.throwIfAborted(signal);
+      emit("downloading_script", 28, "正在下载 Hermes Windows 安装脚本。", installerUrls[0], { sourceUrl: installerUrls[0] });
       const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log, installerUrls, signal);
       if (!download.ok) {
         return await finish({ ok: false, rootPath, message: `Hermes 安装脚本下载失败：无法访问 ${installerUrls.join(" 或 ")}。请检查网络，或切换安装来源后重试。详情见安装日志：${logPath}` }, "failed");
@@ -396,23 +413,50 @@ export class NativeInstallStrategy implements InstallStrategy {
       await this.patchOfficialInstallerScript(scriptPath, log);
 
       this.throwIfAborted(signal);
-      emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本。", rootPath, { sourceUrl: download.url });
+
+      const executionPolicyCheck = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Write-Host 'execution-policy-ok'"], process.cwd(), log, 15_000, { signal });
+      if (executionPolicyCheck.exitCode !== 0 || !executionPolicyCheck.stdout.includes("execution-policy-ok")) {
+        log.push("PowerShell execution policy check failed: " + executionPolicyCheck.stderr);
+        return await finish({
+          ok: false,
+          rootPath,
+          message: `无法运行 Hermes 安装脚本：PowerShell 执行策略受限（${executionPolicyCheck.stderr.trim() || "未知错误"}）。请尝试以下方法后重试：1) 以管理员身份运行 PowerShell 执行 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned；2) 或在设置中心切换国内社区镜像后重试；3) 或参考手动安装向导手动安装 Hermes。`,
+        }, "failed");
+      }
+
+      const mirrorEnv = await this.detectPipMirror(log);
+      const installerEnv: Record<string, string> | undefined = mirrorEnv
+        ? {
+            PIP_INDEX_URL: mirrorEnv,
+            UV_INDEX_URL: mirrorEnv,
+            PIP_TRUSTED_HOST: new URL(mirrorEnv).hostname,
+          }
+        : undefined;
+      if (mirrorEnv) {
+        emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本（已启用国内镜像）。", rootPath, { sourceUrl: download.url });
+        log.push(`Using pip/uv mirror: ${mirrorEnv}`);
+      } else {
+        emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本。", rootPath, { sourceUrl: download.url });
+      }
       const installerArgs = await this.officialInstallerArgs(scriptPath, hermesHome, rootPath);
       log.push(`Official installer args: ${installerArgs.join(" ")}`);
+      let installerProgress = 45;
       const install = await this.runLogged("powershell.exe", installerArgs, logDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         signal,
         heartbeatMs: 15_000,
+        env: installerEnv,
         onHeartbeat: (elapsedSeconds) => {
           const minutes = Math.floor(elapsedSeconds / 60);
           let detail = `已等待 ${elapsedSeconds} 秒。官方脚本正在后台下载并安装依赖，这是正常现象。`;
           if (elapsedSeconds > 120) {
             detail += " 如果长时间卡住，可能是网络连接较慢、依赖源受限或 PowerShell 执行策略被组策略限制。可以展开日志定位阻塞项，或取消后切换国内社区镜像重试。";
           }
-          emit("running_installer", 55, minutes >= 2 ? `安装脚本仍在运行（已 ${minutes} 分钟）` : "安装脚本仍在运行，请保持网络连接。", detail);
+          emit("running_installer", installerProgress, minutes >= 2 ? `安装脚本仍在运行（已 ${minutes} 分钟）` : "安装脚本仍在运行，请保持网络连接。", detail);
         },
         onLine: (line) => {
           const mapped = installerProgressFromLine(line);
-          emit("running_installer", mapped.progress, mapped.message, line, { logLine: line, sourceUrl: download.url });
+          installerProgress = Math.max(installerProgress, mapped.progress);
+          emit("running_installer", installerProgress, mapped.message, line, { logLine: line, sourceUrl: download.url });
         },
       });
       if (signal?.aborted) {
@@ -708,6 +752,28 @@ export class NativeInstallStrategy implements InstallStrategy {
     };
   }
 
+  private async isGithubSlow(log: string[]): Promise<boolean> {
+    try {
+      const result = await this.runLogged("powershell.exe", ["-NoProfile", "-Command", "Test-Connection -ComputerName github.com -Count 2 -Quiet"], process.cwd(), log, 10_000);
+      if (result.exitCode !== 0 || result.stdout.trim().toLowerCase() !== "true") {
+        log.push("GitHub connectivity check: unreachable or timed out.");
+        return true;
+      }
+      const start = Date.now();
+      const httpResult = await this.runLogged("powershell.exe", ["-NoProfile", "-Command", "Invoke-WebRequest -Uri 'https://github.com' -UseBasicParsing -TimeoutSec 8 -MaximumRedirection 0; exit $LASTEXITCODE"], process.cwd(), log, 15_000);
+      const elapsed = Date.now() - start;
+      if (httpResult.exitCode !== 0 || elapsed > 6000) {
+        log.push(`GitHub HTTP latency: ${elapsed}ms (slow or blocked).`);
+        return true;
+      }
+      log.push(`GitHub HTTP latency: ${elapsed}ms (ok).`);
+      return false;
+    } catch {
+      log.push("GitHub connectivity check: exception.");
+      return true;
+    }
+  }
+
   private async ensureGitAvailable(log: string[], emit: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void) {
     const probe = await this.runtimeProbeService?.probe({ runtime: { mode: "windows", pythonCommand: "python", windowsAgentMode: "hermes_native" } }).catch(() => undefined);
     if (probe?.gitAvailable) {
@@ -958,7 +1024,7 @@ export class NativeInstallStrategy implements InstallStrategy {
     return Number.isFinite(count) ? count : undefined;
   }
 
-  private async runLogged(command: string, args: string[], cwd: string, log: string[], timeoutMs: number, heartbeat?: { heartbeatMs?: number; onHeartbeat?: (elapsedSeconds: number) => void; signal?: AbortSignal; onLine?: (line: string) => void }) {
+  private async runLogged(command: string, args: string[], cwd: string, log: string[], timeoutMs: number, heartbeat?: { heartbeatMs?: number; onHeartbeat?: (elapsedSeconds: number) => void; signal?: AbortSignal; onLine?: (line: string) => void; env?: Record<string, string> }) {
     log.push(`$ ${command} ${args.join(" ")}`);
     const startedAt = Date.now();
     const timer = heartbeat?.heartbeatMs && heartbeat.onHeartbeat ? setInterval(() => {
@@ -968,7 +1034,7 @@ export class NativeInstallStrategy implements InstallStrategy {
     }, heartbeat.heartbeatMs) : undefined;
     try {
       if (!heartbeat?.onLine) {
-        const result = await runCommand(command, args, { cwd, timeoutMs, signal: heartbeat?.signal });
+        const result = await runCommand(command, args, { cwd, timeoutMs, signal: heartbeat?.signal, env: heartbeat?.env });
         if (result.stdout.trim()) log.push(result.stdout.trim());
         if (result.stderr.trim()) log.push(result.stderr.trim());
         log.push(`exit ${result.exitCode ?? "unknown"}`);
@@ -978,7 +1044,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       let stdout = "";
       let stderr = "";
       let exitCode: number | null = null;
-      for await (const event of streamCommand(command, args, { cwd, timeoutMs, signal: heartbeat.signal })) {
+      for await (const event of streamCommand(command, args, { cwd, timeoutMs, signal: heartbeat.signal, env: heartbeat.env })) {
         if (event.type === "stdout" || event.type === "stderr") {
           const line = event.line.trim();
           if (!line) continue;
@@ -1134,6 +1200,46 @@ export class NativeInstallStrategy implements InstallStrategy {
     }
     log.push("Editable install check: no venv Python available to probe.");
     return false;
+  }
+
+  private async detectPipMirror(log: string[]): Promise<string | undefined> {
+    const mirrors = [
+      { url: "https://pypi.tuna.tsinghua.edu.cn/simple", label: "清华" },
+      { url: "https://mirrors.aliyun.com/pypi/simple", label: "阿里云" },
+      { url: "https://pypi.mirrors.ustc.edu.cn/simple", label: "中科大" },
+    ];
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const start = Date.now();
+      await fetch("https://pypi.org/simple/", { method: "HEAD", signal: controller.signal });
+      clearTimeout(timer);
+      const elapsed = Date.now() - start;
+      if (elapsed < 2000) {
+        log.push(`PyPI official is fast (${elapsed}ms), using default index.`);
+        return undefined;
+      }
+      log.push(`PyPI official is slow (${elapsed}ms), probing mirrors...`);
+    } catch {
+      log.push("PyPI official is unreachable, probing mirrors...");
+    }
+
+    for (const mirror of mirrors) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const start = Date.now();
+        await fetch(mirror.url, { method: "HEAD", signal: controller.signal });
+        clearTimeout(timer);
+        const elapsed = Date.now() - start;
+        log.push(`Mirror ${mirror.label} is available (${elapsed}ms).`);
+        return mirror.url;
+      } catch {
+        log.push(`Mirror ${mirror.label} probe failed.`);
+      }
+    }
+    log.push("All mirrors unreachable, falling back to default index.");
+    return undefined;
   }
 
   private async writeManagedMarker(rootPath: string, editable: boolean, installSource?: InstallSource, installedCommit?: string) {
@@ -1369,29 +1475,32 @@ function diagnosticHint(code: string) {
 
 function installerProgressFromLine(line: string) {
   const text = line.trim();
-  if (/checking .*uv|installing uv|uv python install|python 3\.11|checking python/i.test(text)) {
+  if (/checking .*uv|installing uv|uv python install|python 3\.11|checking python|downloading uv|extracting uv/i.test(text)) {
     return { progress: 50, message: "正在准备 uv / Python 环境。" };
   }
-  if (/Git not found|PortableGit|MinGit|HERMES_GIT_BASH_PATH|Checking Git|Installing Git|downloading .*Git/i.test(text)) {
+  if (/Git not found|PortableGit|MinGit|HERMES_GIT_BASH_PATH|Checking Git|Installing Git|downloading .*Git|extracting.*Git/i.test(text)) {
     return { progress: 56, message: "正在准备 Git / Git Bash 工具链。" };
   }
-  if (/Checking Node|Node\.js|Installing Node|Downloading Node|npm/i.test(text)) {
+  if (/Checking Node|Node\.js|Installing Node|Downloading Node|npm|Installing.*browser/i.test(text)) {
     return { progress: 62, message: "正在准备 Node.js 与浏览器工具依赖。" };
   }
-  if (/ripgrep|ffmpeg|system packages|winget|chocolatey|scoop/i.test(text)) {
+  if (/ripgrep|ffmpeg|system packages|winget|chocolatey|scoop|downloading.*package|extracting.*package/i.test(text)) {
     return { progress: 67, message: "正在准备 ripgrep / ffmpeg 等系统工具。" };
   }
-  if (/download.*repository|clone|submodule|fetch|checkout|Hermes repository/i.test(text)) {
+  if (/download.*repository|clone|submodule|fetch|checkout|Hermes repository|git.*clone|git.*pull/i.test(text)) {
     return { progress: 72, message: "正在下载或同步 Hermes 仓库。" };
   }
-  if (/Installing Hermes|uv sync|pip install|Installing Python dependencies|venv/i.test(text)) {
+  if (/Installing Hermes|uv sync|pip install|Installing Python dependencies|venv|editable install|pip.*hermes/i.test(text)) {
     return { progress: 78, message: "正在安装 Hermes Python 依赖。" };
   }
-  if (/setup wizard|Skipping setup|gateway|Start messaging gateway/i.test(text)) {
+  if (/setup wizard|Skipping setup|gateway|Start messaging gateway|setup.*complete/i.test(text)) {
     return { progress: 86, message: "正在完成 Hermes 设置收尾。" };
   }
-  if (/Installation complete|successfully|Next steps|Hermes is ready/i.test(text)) {
+  if (/Installation complete|successfully|Next steps|Hermes is ready|All done|Enjoy|completed/i.test(text)) {
     return { progress: 90, message: "安装脚本已完成，正在等待 Forge 复检。" };
+  }
+  if (/error|fail|exception|timeout|cannot|unable|denied|blocked|abort/i.test(text)) {
+    return { progress: 55, message: "安装脚本可能遇到问题，正在继续观察。" };
   }
   return { progress: 55, message: "安装脚本正在输出日志。" };
 }

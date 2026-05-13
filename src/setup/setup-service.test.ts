@@ -12,6 +12,16 @@ const runCommandMock = vi.fn();
 
 vi.mock("../process/command-runner", () => ({
   runCommand: (...args: Parameters<typeof runCommandMock>) => runCommandMock(...args),
+  streamCommand: async function* (...args: Parameters<typeof runCommandMock>) {
+    const result = await runCommandMock(...args);
+    for (const line of String(result.stdout ?? "").split(/\r?\n/).filter(Boolean)) {
+      yield { type: "stdout", line };
+    }
+    for (const line of String(result.stderr ?? "").split(/\r?\n/).filter(Boolean)) {
+      yield { type: "stderr", line };
+    }
+    yield { type: "exit", exitCode: result.exitCode };
+  },
 }));
 
 let tempRoot = "";
