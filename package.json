@@ -74,9 +74,6 @@
         "repo": "hermes-forge"
       }
     ],
-    "releaseInfo": {
-      "releaseNotesFile": "release/release-notes-generated.md"
-    },
     "directories": {
       "output": "release"
     },
