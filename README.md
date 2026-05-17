@@ -3,37 +3,37 @@
 [![Release](https://img.shields.io/github/v/release/Mahiruxia/hermes-forge)](https://github.com/Mahiruxia/hermes-forge/releases)
 [![License](https://img.shields.io/github/license/Mahiruxia/hermes-forge)](LICENSE)
 
-A local-first desktop client for [Hermes Agent](https://github.com/NousResearch/hermes-agent), built with Electron + React + TypeScript.
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) 的本地优先桌面客户端，基于 Electron + React + TypeScript 构建。
 
-> Hermes Forge is a community project, not an official Hermes Agent client.
+> 社区项目，非 Hermes Agent 官方客户端。
 
 ![Dashboard](assets/screenshots/hermes-forge-dashboard.png)
 
-## Overview
+## 定位
 
-Hermes Forge provides a unified desktop interface for Hermes Agent on Windows and macOS. It handles installation, model configuration, task execution, file attachments, permission gating, and auto-updates — without requiring manual CLI setup.
+Hermes Forge 为 Windows 与 macOS 提供统一的 Hermes Agent 桌面界面，覆盖安装部署、模型配置、任务执行、文件附件、权限审批与自动更新，无需手动维护 CLI 环境。
 
-Key capabilities:
+核心能力：
 
-- **Zero-config onboarding** — Auto-detects missing dependencies (Git, Python, Hermes Agent) and offers one-click repair or installation.
-- **Model sync** — Desktop model profiles sync to Hermes CLI and Gateway runtime, preventing config drift across interfaces.
-- **Native Windows bridge** — File operations, PowerShell, clipboard, screenshots, window management, and keyboard/mouse automation with main-process approval gating.
-- **Kanban task board** — Full task lifecycle management with Gateway scheduler integration, drag-and-drop, and real-time diagnostics.
-- **WeChat Gateway** — QR-code login with state-machine-driven onboarding and dependency recovery.
-- **Auto-update** — `electron-updater` backed by GitHub Releases with silent background checks and progress tracking.
+- **零配置 onboarding** — 自动检测 Git、Python、Hermes Agent 等依赖缺失，提供一键修复或自动安装。
+- **模型同步** — 桌面端模型配置实时同步至 Hermes CLI 与 Gateway 运行时，避免多端配置漂移。
+- **Windows 原生桥接** — 文件操作、PowerShell、剪贴板、截图、窗口管理与键鼠自动化，统一走主进程审批服务。
+- **Kanban 任务看板** — 完整任务生命周期管理，集成 Gateway 调度器，支持拖拽与实时诊断。
+- **微信 Gateway** — 扫码登录状态机驱动，依赖缺失时自动提示修复路径。
+- **自动更新** — `electron-updater` + GitHub Releases，支持静默检查、后台下载与进度追踪。
 
-## Download
+## 下载
 
-| Platform | Download |
-|----------|----------|
+| 平台 | 下载 |
+|------|------|
 | Windows (x64) | [`Hermes-Forge-x.y.z-x64.exe`](https://github.com/Mahiruxia/hermes-forge/releases) |
 | macOS (Apple Silicon) | [`Hermes-Forge-x.y.z-arm64.dmg`](https://github.com/Mahiruxia/hermes-forge/releases) |
 
-> Unsigned binaries. Gatekeeper / SmartScreen warnings on first launch are expected.
+> 当前为未签名二进制，首次启动时系统安全提示为预期行为。
 
-## Development
+## 开发
 
-Requirements: Node.js 20+, npm, Git, Python 3.10+
+环境要求：Node.js 20+、npm、Git、Python 3.10+
 
 ```bash
 git clone https://github.com/Mahiruxia/hermes-forge.git
@@ -46,70 +46,70 @@ npm run dev
 ```bash
 npm run check    # TypeScript
 npm test         # Vitest
-npm run build    # Production
+npm run build    # 生产构建
 ```
 
-## Runtime Resolution
+## 运行时路径解析
 
-Hermes root path resolves in order:
+Hermes 根目录按以下优先级解析：
 
-1. Application setting
+1. 应用设置中保存的路径
 2. `HERMES_HOME`
 3. `HERMES_AGENT_HOME`
 4. `~/Hermes Agent`
 5. `<project-root>/Hermes Agent`
 
-Override at build time:
+构建时可通过环境变量覆盖：
 
 ```dotenv
 HERMES_INSTALL_REPO_URL=https://github.com/NousResearch/hermes-agent.git
 ```
 
-## Architecture
+## 架构
 
 ```
 src/
-  main/       Electron main process, IPC, config, secrets, connectors
-  preload/    Secure renderer bridge
-  renderer/   React UI, workbench, settings, connectors
-  adapters/   Hermes CLI adapter, output parsing, launch metadata
-  process/    Task runner, command runner, snapshots, workspace locks
-  setup/      First-run diagnostics, auto-install, dependency repair
-  updater/    GitHub Releases auto-update
-  security/   Path validation, permission constants
-  shared/     Types, schemas, IPC channels
+  main/       Electron 主进程、IPC、配置、密钥、连接器与原生服务
+  preload/    Renderer 安全桥接层
+  renderer/   React UI、工作台、设置中心、连接器面板
+  adapters/   Hermes CLI 适配、输出解析、启动元数据
+  process/    任务运行器、命令运行器、快照、工作区锁
+  setup/      首启体检、自动安装、依赖修复
+  updater/    GitHub Releases 自动更新
+  security/   路径校验、权限常量
+  shared/     类型、Schema、IPC 通道
 ```
 
-Design principles:
+设计原则：
 
-- **Hermes-only** — Single execution engine. No multi-engine branching.
-- **Main-process trust boundary** — Credentials, filesystem, subprocesses, and native capabilities live in the main process.
-- **Whitelist IPC** — Renderer access is restricted to explicit preload APIs.
-- **Recoverable first-run** — Missing dependencies are surfaced with actionable fixes, not stack traces.
-- **Local-first** — Sessions, attachments, snapshots, and logs stay on the user's machine.
+- **Hermes-only** — 单引擎执行，无多引擎分支。
+- **主进程可信边界** — 密钥、文件系统、子进程、Gateway 与原生能力集中于主进程。
+- **白名单 IPC** — Renderer 仅通过显式 Preload API 与主进程交互。
+- **可恢复首启** — 依赖缺失时给出可操作的修复路径，而非堆栈错误。
+- **本地优先** — 会话、附件、快照与日志默认留存于用户本机。
 
-## Capabilities & Roadmap
+## 能力与路线
 
-- [Capability Matrix](CAPABILITY_MATRIX.md)
-- [Roadmap](ROADMAP.md)
+- [能力矩阵](CAPABILITY_MATRIX.md)
+- [路线图](ROADMAP.md)
 
-## Contributing
+## 贡献
 
-Issues, discussions, and draft PRs are welcome. Priority areas:
+欢迎提交 Issue、Discussion 与 Draft PR。当前优先方向：
 
-- First-run and dependency repair UX
-- Windows physical-machine compatibility
-- WeChat Gateway long-running stability
-- Non-WeChat connector runtime adapters
-- Windows bridge approval UX and audit trails
-- Electron E2E / smoke tests
-- Code signing and release provenance
+- 首启与依赖修复体验
+- Windows 物理机兼容性
+- 微信 Gateway 长期运行稳定性
+- 非微信连接器 runtime adapter
+- Windows 桥接审批 UX 与审计展示
+- Electron E2E / smoke 测试
+- 代码签名与 release provenance
 
 ```bash
 npm run check && npm test
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+详见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SECURITY.md](SECURITY.md)。
 
 ## License
 
