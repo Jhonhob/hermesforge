@@ -56,9 +56,10 @@ describe("StatusBar", () => {
 
     render(<StatusBar />);
 
-    expect(screen.getByRole("button", { name: "API 连接正常" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Hermes 已连接 · 当前运行：WSL" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Gateway 状态未刷新" })).toBeInTheDocument();
+    // Both compact dots and full chips render the same buttons
+    expect(screen.getAllByRole("button", { name: "API 连接正常" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: "Hermes 已连接 · 当前运行：WSL" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole("button", { name: "Gateway 状态未刷新" }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByTestId("status-light-api")).toHaveClass("hermes-status-light--ok");
     expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--ok");
     expect(screen.getByTestId("status-light-gateway")).toHaveClass("hermes-status-light--idle");
@@ -142,7 +143,9 @@ describe("StatusBar", () => {
 
     render(<StatusBar />);
 
-    expect(screen.getByRole("button", { name: /Hermes 有新版本可更新/ })).toHaveTextContent("Hermes 更新");
+    const updateButtons = screen.getAllByRole("button", { name: /Hermes 有新版本可更新/ });
+    expect(updateButtons.length).toBeGreaterThanOrEqual(1);
+    expect(updateButtons.some((btn) => btn.textContent?.includes("Hermes 更新"))).toBe(true);
     expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--warn");
   });
 });

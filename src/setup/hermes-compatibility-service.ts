@@ -31,13 +31,13 @@ export class HermesCompatibilityService {
 
     const cliPath = await resolveWindowsHermesCliPath(rootPath) ?? defaultWindowsHermesCliPath(rootPath);
     if (!(await exists(cliPath))) {
-      return this.empty(`未找到 Hermes CLI：${cliPath}`, rootPath, cliPath);
+      return this.empty(`未找到 Hermes CLI，请检查安装路径。`, rootPath, cliPath);
     }
 
     const launch = await this.detectLaunch(rootPath, cliPath, config);
     if (!launch.versionResult || launch.versionResult.exitCode !== 0 || !outputText(launch.versionResult).trim()) {
       return this.empty(
-        `Hermes CLI 不可启动或没有版本输出：${outputText(launch.versionResult).trim() || `exit ${launch.versionResult?.exitCode ?? "unknown"}`}`,
+        `Hermes CLI 不可启动或没有版本输出。`,
         rootPath,
         cliPath,
       );
@@ -140,8 +140,8 @@ export class HermesCompatibilityService {
         supportsResume: Boolean(version && isAtLeastVersion(version, RESUME_SUPPORT_VERSION)),
         missing,
         message: version && isAtLeastVersion(version, RESUME_SUPPORT_VERSION)
-          ? `官方 Hermes ${version} 可运行，但未提供 Forge 增强能力 ${missing.join(", ")}。`
-          : `Hermes capabilities 不可用：${outputText(result).trim() || `exit ${result.exitCode ?? "unknown"}`}`,
+          ? `官方 Hermes ${version} 可运行，但未提供 Forge 增强能力。`
+          : `Hermes capabilities 不可用。`,
       };
     }
     try {
@@ -169,7 +169,7 @@ export class HermesCompatibilityService {
         supported: missing.length === 0,
         ...capabilities,
         missing,
-        message: missing.length ? `Hermes capabilities 缺少：${missing.join(", ")}。` : "Hermes 增强能力可用。",
+        message: missing.length ? `Hermes 增强能力不完整。` : "Hermes 增强能力可用。",
       };
     } catch (error) {
       return {
@@ -178,7 +178,7 @@ export class HermesCompatibilityService {
         supportsLaunchMetadataEnv: false,
         supportsResume: false,
         missing: ["capabilities-json"],
-        message: `capabilities --json 返回内容不是有效 JSON：${error instanceof Error ? error.message : String(error)}`,
+        message: `Hermes 增强能力探测返回异常。`,
       };
     }
   }
@@ -221,8 +221,8 @@ except Exception as e:
         error?: string;
       };
       if (parsed.compatible) return { ready: true, message: "Forge 任务能力可用。" };
-      if (!parsed.has_run_conversation) return { ready: false, message: "Hermes Agent 缺少 AIAgent.run_conversation。" };
-      if (parsed.missing?.length) return { ready: false, message: `Hermes Agent 缺少必要初始化参数：${parsed.missing.join(", ")}。` };
+      if (!parsed.has_run_conversation) return { ready: false, message: "Hermes Agent 缺少必要的对话能力。" };
+      if (parsed.missing?.length) return { ready: false, message: `Hermes Agent 缺少必要初始化参数。` };
       return { ready: false, message: parsed.error ?? "Hermes Agent 兼容性探测失败。" };
     } catch {
       return { ready: false, message: outputText(result).trim() || "Hermes Agent 兼容性探测无有效输出。" };

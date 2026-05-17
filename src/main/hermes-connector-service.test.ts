@@ -108,6 +108,8 @@ describe("HermesConnectorService helpers", () => {
       running: true,
       pid: 12345,
       updatedAt: "2026-04-21T04:01:04.129897+00:00",
+      platformStates: { weixin: "connected" },
+      connectedPlatforms: ["weixin"],
     });
     expect(snapshot?.message).toContain("weixin");
     expect(testOnly.parseGatewayStateSnapshot(JSON.stringify({
@@ -335,6 +337,42 @@ describe("HermesConnectorService helpers", () => {
     expect(connector.status).toBe("configured");
   });
 
+  it("does not report Weixin as running when Gateway only connected another platform", async () => {
+    const service = new HermesConnectorService(
+      {} as never,
+      { hasSecret: vi.fn(async (ref: string) => ref === "connector.weixin.token") } as never,
+      async () => "D:\\Hermes Agent",
+    );
+    const stateful = service as any;
+
+    const connector = await stateful.toConnector(
+      testOnly.PLATFORM_REGISTRY.find((platform: { id: string }) => platform.id === "weixin"),
+      {
+        platforms: {
+          weixin: {
+            enabled: true,
+            values: { accountId: "wx-account" },
+            secretRefs: { token: "connector.weixin.token" },
+          },
+        },
+      },
+      {},
+      {
+        running: true,
+        managedRunning: true,
+        healthStatus: "running",
+        platformStates: { telegram: "connected" },
+        connectedPlatforms: ["telegram"],
+        message: "Gateway 状态文件显示正在运行，已连接：telegram。",
+        checkedAt: "2026-04-23T00:00:00.000Z",
+      },
+    );
+
+    expect(connector.configured).toBe(true);
+    expect(connector.runtimeStatus).toBe("stopped");
+    expect(connector.message).toBe("已配置，等待同步或启动 Gateway。");
+  });
+
   it("returns a structured Weixin failure status when Hermes root cannot be resolved", async () => {
     const service = new HermesConnectorService(
       {} as never,
@@ -349,7 +387,7 @@ describe("HermesConnectorService helpers", () => {
     expect(result.ok).toBe(false);
     expect(result.status.phase).toBe("failed");
     expect(result.status.failureCode).toBe("hermes_root_unavailable");
-    expect(result.status.message).toContain("Hermes Agent 路径未配置");
+    expect(result.status.message).toContain("Hermes Agent");
     expect(result.status.recommendedFix).toBeDefined();
     expect(result.status.failureKind).toBe("manual_fix");
   });
@@ -368,7 +406,7 @@ describe("HermesConnectorService helpers", () => {
     expect(result.ok).toBe(false);
     expect(result.status?.phase).toBe("failed");
     expect(result.status?.failureCode).toBe("hermes_root_unavailable");
-    expect(result.message).toContain("Hermes Agent 路径未配置");
+    expect(result.message).toContain("Hermes Agent");
     expect(result.recommendedFix).toBeDefined();
   });
 });

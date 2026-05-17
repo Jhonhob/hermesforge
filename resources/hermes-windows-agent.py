@@ -222,6 +222,20 @@ def _make_agent_callbacks(session_id: str | None):
             "session_id": session_id,
         })
 
+    def clarify_callback(question, choices):
+        """Emit clarify event and return error since Forge does not support interactive stdin responses."""
+        emit("clarify", {
+            "question": str(question or ""),
+            "choices": list(choices) if choices else None,
+            "session_id": session_id,
+        })
+        # Forge reads stdout via pipe; we cannot synchronously wait for user input.
+        # Return an error so the agent knows clarification failed in this context.
+        raise RuntimeError(
+            "Clarify requires interactive user input, which is not supported in Forge runner. "
+            "Please rephrase your request to be more specific."
+        )
+
     return {
         "stream_delta_callback": stream_delta,
         "reasoning_callback": reasoning_delta,
@@ -230,6 +244,7 @@ def _make_agent_callbacks(session_id: str | None):
         "tool_complete_callback": tool_complete,
         "status_callback": status,
         "step_callback": step,
+        "clarify_callback": clarify_callback,
     }
 
 
@@ -511,7 +526,18 @@ def main() -> int:
     parser.add_argument("--image-path", help="图片附件路径")
     parser.add_argument("--source", default="hermes-forge-desktop", help="调用来源标识")
     parser.add_argument("--max-turns", type=int, default=90, help="最大对话轮数")
+    parser.add_argument("--checkpoints", action="store_true", help="启用文件修改前的自动检查点")
+    parser.add_argument("--pass-session-id", action="store_true", help="在工具调用输出中附加 session ID")
+    parser.add_argument("--skip-context-files", action="store_true", help="跳过自动注入 SOUL.md、AGENTS.md、.cursorrules")
+    parser.add_argument("--skip-memory", action="store_true", help="跳过记忆加载")
     args = parser.parse_args()
+
+    # Respect HERMES_IGNORE_RULES env var (set by Hermes CLI --ignore-rules) as default for skip flags.
+    if os.environ.get("HERMES_IGNORE_RULES") == "1":
+        if not args.skip_context_files:
+            args.skip_context_files = True
+        if not args.skip_memory:
+            args.skip_memory = True
 
     if args.workspace_path:
         os.environ["TERMINAL_CWD"] = str(Path(args.workspace_path).resolve())
@@ -567,7 +593,10 @@ def main() -> int:
             session_id=args.session_id,
             platform=args.source,
             session_db=session_db,
-            skip_context_files=False,
+            skip_context_files=args.skip_context_files,
+            skip_memory=args.skip_memory,
+            checkpoints_enabled=args.checkpoints,
+            pass_session_id=args.pass_session_id,
             **callbacks,
         )
 

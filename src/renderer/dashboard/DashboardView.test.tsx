@@ -471,7 +471,7 @@ describe("DashboardView", () => {
     const modelButton = screen.getByRole("button", { name: "qwen" });
     const attachmentButton = screen.getByRole("button", { name: "添加附件" });
 
-    expect(input).toHaveAttribute("placeholder", "写给 Hermes…");
+    expect(input).toHaveAttribute("placeholder", "写给 Hermes… (/ 命令，拖拽或粘贴附件)");
     expect(sendButton).not.toBeDisabled();
     expect(sendButton).toHaveClass("h-9");
     expect(sendButton).toHaveClass("bg-[var(--hermes-primary)]");

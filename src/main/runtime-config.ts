@@ -180,7 +180,7 @@ export class RuntimeConfigStore {
       configPath: this.configPath,
       backupPath,
       reason,
-      message: error instanceof Error ? error.message : String(error),
+      message: "配置文件损坏，已自动恢复默认配置。"
     };
     return config;
   }

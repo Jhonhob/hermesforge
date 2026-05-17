@@ -524,8 +524,8 @@ export class OneClickDiagnosticsOrchestrator {
         title: "Hermes capabilities",
         status: capabilityStatus.ok ? "pass" : "warn",
         severity: capabilityStatus.ok ? "info" : "warning",
-        summary: capabilityStatus.ok ? "capabilities --json 返回正常，增强能力可用。" : capabilityStatus.message,
-        details: capabilityStatus.ok ? undefined : (result.stderr || result.stdout || "").slice(0, 1000),
+        summary: capabilityStatus.ok ? "Hermes CLI 增强能力可用。" : capabilityStatus.message,
+        details: capabilityStatus.ok ? undefined : "原始输出已记录到诊断报告，可通过导出功能查看。",
         evidence: { command: result.command, cliPath, exitCode: result.exitCode, capabilities: capabilityStatus.capabilities },
         autoFixable: false,
         userActionRequired: false,
@@ -555,7 +555,7 @@ export class OneClickDiagnosticsOrchestrator {
           : doctorSupported
             ? "Hermes doctor 执行失败。"
             : "当前 Hermes CLI 不支持 doctor 命令，已跳过。",
-        details: doctorOutput ? doctorOutput.slice(0, 2000) : undefined,
+        details: doctorOutput ? "原始输出已记录到诊断报告，可通过导出功能查看。" : undefined,
         evidence: { command: doctor.command, exitCode: doctor.exitCode },
         autoFixable: doctorSupported,
         fixed: options.autoFix && doctor.exitCode === 0,
@@ -976,8 +976,8 @@ export class OneClickDiagnosticsOrchestrator {
         title: "Python 依赖",
         status: "fail",
         severity: "error",
-        summary: `未找到可用的 Python 解释器（已尝试：${candidates.join("、")}）。`,
-        details: pythonCheckOutput || undefined,
+        summary: "未找到可用的 Python 解释器。",
+        details: "原始检测输出已记录到诊断报告。",
         autoFixable: false,
         userActionRequired: true,
         suggestedActions: ["安装 Python（建议 3.10+），或在设置中指定正确的 Python 命令。"],
@@ -987,24 +987,46 @@ export class OneClickDiagnosticsOrchestrator {
     }
 
     const pipCheck = await this.runPipVersionCheck(pythonCmd);
-    if (pipCheck.exitCode !== 0) {
+    let hasPip = pipCheck.exitCode === 0;
+
+    const probe = await this.probePythonModules(pythonCmd);
+
+    // 如果 pip 不可用，但关键模块都已就绪，降级为 warn（避免误报）。
+    // Windows Native 运行时可能通过其他方式已具备 yaml/dotenv，pip 缺失不阻塞主链路。
+    if (!hasPip && probe.ok) {
+      items.push(item({
+        id: "python.deps",
+        title: "Python 依赖",
+        status: "warn",
+        severity: "warning",
+        summary: "当前 Python 环境没有 pip，但 PyYAML / python-dotenv 已就绪，不影响运行。",
+        details: undefined,
+        evidence: { pythonCommand: pythonCmd, pipError: (pipCheck.stderr || pipCheck.stdout).trim() || undefined },
+        autoFixable: false,
+        userActionRequired: false,
+        suggestedActions: ["如需在 venv 中安装新包，可手动安装 pip。"],
+        source: "hermes-cli-resolver",
+      }));
+      return;
+    }
+
+    // pip 缺失且模块也不全，才是真正的阻塞错误
+    if (!hasPip && !probe.ok) {
       items.push(item({
         id: "python.deps",
         title: "Python 依赖",
         status: "fail",
         severity: "error",
         summary: "Python 环境缺少 pip，无法安装 PyYAML / python-dotenv。",
-        details: (pipCheck.stderr || pipCheck.stdout).trim() || undefined,
-        evidence: { pythonCommand: pythonCmd },
+        details: undefined,
+        evidence: { pythonCommand: pythonCmd, pipError: (pipCheck.stderr || pipCheck.stdout).trim() || undefined },
         autoFixable: false,
         userActionRequired: true,
-        suggestedActions: ["安装 pip：https://pip.pypa.io/en/stable/installation/"],
+        suggestedActions: ["安装 pip。"],
         source: "hermes-cli-resolver",
       }));
       return;
     }
-
-    const probe = await this.probePythonModules(pythonCmd);
 
     let fixed = false;
     let pipFailure: { reason: string; stderr: string; stdout: string } | undefined;
@@ -1034,7 +1056,7 @@ export class OneClickDiagnosticsOrchestrator {
           : pipFailure
             ? `自动安装失败：${pipFailure.reason}`
             : `Python 环境缺少关键依赖：${probe.missingModules.map((m) => (m === "yaml" ? "PyYAML" : "python-dotenv")).join("、")}。`,
-      details: pipFailure ? `${pipFailure.reason}\n${pipFailure.stderr.slice(0, 800)}` : probe.details,
+      details: pipFailure ? pipFailure.reason : probe.details,
       evidence: { pythonCommand: pythonCmd, missingModules: probe.missingModules, rawOutput: probe.rawOutput },
       autoFixable: !probe.ok && probe.missingModules.length > 0,
       fixed,
@@ -1238,13 +1260,13 @@ function failureItem(
     title,
     status: "fail",
     severity: "error",
-    summary: extra.summary ?? message,
-    details: extra.details ?? message,
+    summary: extra.summary ?? "检查执行异常。",
+    details: extra.details ?? "原始错误已记录到诊断报告，可通过导出功能查看。",
     autoFixable: extra.autoFixable ?? false,
     userActionRequired: extra.userActionRequired ?? true,
     suggestedActions: extra.suggestedActions ?? ["导出诊断报告并根据错误信息修复。"],
     source: extra.source,
-    evidence: extra.evidence,
+    evidence: { ...(extra.evidence ?? {}), rawError: message },
     fixed: extra.fixed,
   });
 }

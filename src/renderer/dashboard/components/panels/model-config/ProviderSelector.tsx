@@ -60,7 +60,7 @@ export function ProviderSelector(props: {
       </button>
 
       {open ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+10px)] z-30 grid min-h-[184px] overflow-hidden rounded-[26px] bg-white/95 shadow-[0_30px_90px_rgba(15,23,42,0.16)] ring-1 ring-slate-200/70 backdrop-blur md:grid-cols-[minmax(260px,1fr)_minmax(260px,340px)]">
+        <div className="absolute left-0 right-0 top-[calc(100%+10px)] z-30 grid min-h-[184px] overflow-hidden rounded-[26px] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.16)] ring-1 ring-slate-200/70 md:grid-cols-[minmax(260px,1fr)_minmax(260px,340px)]">
           <div className="space-y-1 bg-slate-50/70 p-2">
             {TEMPLATE_GROUPS.map((group) => {
               const active = activeGroup === group.id;

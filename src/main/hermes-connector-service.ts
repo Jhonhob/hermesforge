@@ -58,6 +58,8 @@ type GatewayStateSnapshot = {
   pid?: number;
   updatedAt?: string;
   message?: string;
+  platformStates?: Record<string, string>;
+  connectedPlatforms?: string[];
 };
 
 type GatewayModelSyncResult = {
@@ -359,6 +361,8 @@ export class HermesConnectorService {
       running,
       managedRunning,
       healthStatus,
+      platformStates: stateStatus?.platformStates,
+      connectedPlatforms: stateStatus?.connectedPlatforms,
       autoStartState: this.gatewayAutoStartState,
       autoStartMessage: this.gatewayAutoStartMessage,
       lastExitCode: this.gatewayLastExitCode,
@@ -399,7 +403,7 @@ export class HermesConnectorService {
       return {
         ok: false,
         status,
-        message: error instanceof Error ? error.message : "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。",
+        message: "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。",
       };
     }
     const runtime = await this.runtimeContext(root);
@@ -465,7 +469,7 @@ export class HermesConnectorService {
     try {
       root = await this.resolveHermesRoot();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。";
+      const message = "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。";
       this.gatewayAutoStartState = "failed";
       this.gatewayAutoStartMessage = message;
       return {
@@ -670,7 +674,7 @@ export class HermesConnectorService {
   }
 
   private failWeixinQrStart(error: unknown, failureCode: string, recommendedFix: string): WeixinQrLoginResult {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = recommendedFix;
     const status: WeixinQrLoginStatus = {
       ...this.weixinQrStatus,
       running: false,
@@ -695,7 +699,7 @@ export class HermesConnectorService {
     failureCode: string,
     recommendedFix: string,
   ): WeixinDependencyInstallResult {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = recommendedFix;
     const status: WeixinQrLoginStatus = {
       ...this.weixinQrStatus,
       running: false,
@@ -1240,7 +1244,7 @@ export class HermesConnectorService {
     const missingRequired = await this.missingRequired(platform, saved, envValues);
     const configured = await this.hasConfigurationSignal(platform, saved, envValues) && missingRequired.length === 0;
     const status = connectorStatus(enabled, configured);
-    const runtimeStatus = connectorRuntimeStatus(enabled, configured, gateway);
+    const runtimeStatus = connectorRuntimeStatus(platform.id, enabled, configured, gateway);
     return {
       platform,
       status,
@@ -1442,7 +1446,7 @@ export class HermesConnectorService {
     });
     return result.exitCode === 0
       ? { ok: true }
-      : { ok: false, message: `Gateway 启动前 hermes --version 检查失败：${result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`}` };
+      : { ok: false, message: `Gateway 启动前 Hermes 版本检查失败，请检查安装是否完整。` };
   }
 
   private async gatewayLaunchFromRuntime(runtime: Extract<ConnectorRuntimeContext, { ok: true }>, hermesEnv: Record<string, string>) {
@@ -1689,7 +1693,7 @@ export class HermesConnectorService {
     } catch (error) {
       return {
         ok: false,
-        message: `Gateway 启动前模型同步失败：${error instanceof Error ? error.message : String(error)}`,
+        message: "Gateway 启动前模型同步失败，请检查模型配置。"
       };
     }
   }
@@ -1820,9 +1824,13 @@ function connectorStatus(enabled: boolean, configured: boolean): HermesConnector
   return "configured";
 }
 
-function connectorRuntimeStatus(enabled: boolean, configured: boolean, gateway: HermesGatewayStatus): HermesConnectorConfig["runtimeStatus"] {
+function connectorRuntimeStatus(platformId: HermesConnectorPlatformId, enabled: boolean, configured: boolean, gateway: HermesGatewayStatus): HermesConnectorConfig["runtimeStatus"] {
   if (!enabled || !configured) return "stopped";
-  if (gateway.running) return "running";
+  const hasPlatformState = Boolean(gateway.platformStates && Object.keys(gateway.platformStates).length > 0);
+  const platformState = gateway.platformStates?.[platformId]?.toLowerCase();
+  if (platformState === "connected") return "running";
+  if (platformState && platformState !== "connected") return "error";
+  if (gateway.running && !hasPlatformState) return "running";
   if (gateway.healthStatus === "error" || Boolean(gateway.lastError)) return "error";
   return "stopped";
 }
@@ -2123,19 +2131,25 @@ function parseGatewayStateSnapshot(raw: string, pidAlive: (pid: number) => boole
   const updatedAtMs = updatedAt ? parseGatewayUpdatedAtMs(updatedAt) : undefined;
   const freshWithoutPid = typeof updatedAtMs === "number" && nowMs - updatedAtMs >= 0 && nowMs - updatedAtMs <= 120_000;
   if (!pid && !freshWithoutPid) return undefined;
-  const platforms = record.platforms && typeof record.platforms === "object"
-    ? Object.entries(record.platforms as Record<string, Record<string, unknown>>)
-      .filter(([, value]) => value?.state === "connected")
-      .map(([key]) => key)
+  const platformStates = record.platforms && typeof record.platforms === "object"
+    ? Object.fromEntries(
+      Object.entries(record.platforms as Record<string, Record<string, unknown>>)
+        .map(([key, value]) => [key, typeof value?.state === "string" ? value.state : "unknown"]),
+    )
+    : undefined;
+  const connectedPlatforms = platformStates
+    ? Object.entries(platformStates).filter(([, state]) => state.toLowerCase() === "connected").map(([key]) => key)
     : [];
-  const message = platforms.length > 0
-    ? `Gateway 状态文件显示正在运行，已连接：${platforms.join(", ")}。`
+  const message = connectedPlatforms.length > 0
+    ? `Gateway 状态文件显示正在运行，已连接：${connectedPlatforms.join(", ")}。`
     : "Gateway 状态文件显示正在运行。";
   return {
     running: true,
     pid,
     updatedAt,
     message,
+    platformStates,
+    connectedPlatforms,
   };
 }
 

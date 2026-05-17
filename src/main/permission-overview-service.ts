@@ -101,7 +101,7 @@ async function probeCapabilities(input: {
       supportsLaunchMetadataArg: false,
       supportsLaunchMetadataEnv: false,
       supportsResume: false,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: "权限文件读取失败。",
       failureKind: "file_missing",
     });
   }

@@ -844,17 +844,49 @@ function AdvancedTextInput(props: { label: string; tooltip: string; value: strin
 }
 
 function AdvancedSelect(props: { label: string; tooltip: string; value: string; options: Array<{ value: string; label: string }>; onChange: (value: string) => void | Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const selected = props.options.find((option) => option.value === props.value) ?? props.options[0];
   return (
-    <label className="grid gap-1.5 text-sm">
+    <div className="relative grid gap-1.5 text-sm">
       <FieldLabel label={props.label} hint={props.tooltip} />
-      <select
-        className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-800"
-        value={props.value}
-        onChange={(event) => void props.onChange(event.target.value)}
+      <button
+        aria-expanded={open}
+        aria-label={props.label}
+        className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 text-left text-sm text-slate-800 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-200"
+        onClick={() => setOpen((value) => !value)}
+        role="combobox"
+        type="button"
       >
-        {props.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </label>
+        <span className="truncate">{selected?.label ?? props.label}</span>
+        <ChevronDown size={14} className={cn("shrink-0 text-slate-400 transition-transform", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-[calc(100%+6px)] z-30 max-h-64 w-full overflow-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+          {props.options.map((option) => {
+            const active = option.value === props.value;
+            return (
+              <button
+                aria-selected={active}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left text-[13px] transition",
+                  active ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                )}
+                key={option.value}
+                onClick={() => {
+                  setOpen(false);
+                  void props.onChange(option.value);
+                }}
+                role="option"
+                type="button"
+              >
+                <span className="truncate">{option.label}</span>
+                {active ? <CheckCircle2 size={13} /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

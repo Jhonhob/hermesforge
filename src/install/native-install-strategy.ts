@@ -109,12 +109,16 @@ export class NativeInstallStrategy implements InstallStrategy {
     const log: string[] = [];
     const startedAt = new Date().toISOString();
     const hermesRoot = await this.resolveInstallRoot(await this.configStore.getEnginePath("hermes"), log);
-    const preflight = await this.checkInstalledHermes(hermesRoot, log).catch((error) => ({
-      available: false,
-      message: error instanceof Error ? error.message : String(error),
-    }));
+    const preflight = await this.checkInstalledHermes(hermesRoot, log).catch((error) => {
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      return {
+        available: false,
+        message: "更新前检查失败，请检查安装状态。",
+        rawMessage,
+      };
+    });
     if (!preflight.available) {
-      log.push(`Hermes update preflight failed; reinstalling through selected installer. Reason: ${preflight.message}`);
+      log.push(`Hermes update preflight failed; reinstalling through selected installer. Reason: ${(preflight as { rawMessage?: string }).rawMessage ?? preflight.message}`);
       const reinstall = await this.performInstallHermes(undefined, { rootPath: hermesRoot, mode: "windows" }, true);
       return {
         ok: reinstall.ok,
@@ -347,7 +351,7 @@ export class NativeInstallStrategy implements InstallStrategy {
         const rootPath = currentHealth.path ?? await this.configStore.getEnginePath("hermes");
         await this.saveHermesRoot(rootPath, installSource);
         log.push(`Hermes is already available at ${rootPath}.`);
-        return await finish({ ok: true, rootPath, message: `已检测到可用 Hermes：${rootPath}` }, "completed");
+        return await finish({ ok: true, rootPath, message: `已检测到可用 Hermes。` }, "completed");
       }
 
       const requestedRoot = options.rootPath?.trim() || process.env.HERMES_INSTALL_DIR?.trim();
@@ -378,7 +382,7 @@ export class NativeInstallStrategy implements InstallStrategy {
         return await finish({
           ok: false,
           rootPath,
-          message: `目标目录已存在但看起来不是可自动恢复的 Hermes 安装：${rootPath}。请更换安装位置，或手动清理该目录后重试。`,
+          message: `目标目录已存在但看起来不是可自动恢复的 Hermes 安装。请更换安装位置，或手动清理后重试。`,
         }, "failed");
       }
 
@@ -408,7 +412,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       emit("downloading_script", 28, "正在下载 Hermes Windows 安装脚本。", installerUrls[0], { sourceUrl: installerUrls[0] });
       const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log, installerUrls, signal);
       if (!download.ok) {
-        return await finish({ ok: false, rootPath, message: `Hermes 安装脚本下载失败：无法访问 ${installerUrls.join(" 或 ")}。请检查网络，或切换安装来源后重试。详情见安装日志：${logPath}` }, "failed");
+        return await finish({ ok: false, rootPath, message: `Hermes 安装脚本下载失败。请检查网络，或切换安装来源后重试。详情见安装日志。` }, "failed");
       }
       await this.patchOfficialInstallerScript(scriptPath, log);
 
@@ -473,7 +477,7 @@ export class NativeInstallStrategy implements InstallStrategy {
 
       const sourceSync = await this.syncInstalledSourceIfNeeded(rootPath, installSource, log, signal);
       if (!sourceSync.ok) {
-        return await finish({ ok: false, rootPath, message: `${sourceSync.message} 详情见安装日志：${logPath}` }, "failed");
+        return await finish({ ok: false, rootPath, message: `${sourceSync.message} 详情见安装日志。` }, "failed");
       }
 
       emit("health_check", 82, "正在校验 Hermes 是否可启动。", rootPath);
@@ -482,7 +486,7 @@ export class NativeInstallStrategy implements InstallStrategy {
         return await finish({
           ok: false,
           rootPath,
-          message: `Hermes 文件已落地到 ${rootPath}，但本地自检未通过：${localHealth.message}。详情见安装日志：${logPath}`,
+          message: `Hermes 文件已落地，但本地自检未通过：${localHealth.message}。详情见安装日志。`,
         }, "failed");
       }
       await this.repairVenvBestEffort(rootPath, log);
@@ -504,11 +508,11 @@ export class NativeInstallStrategy implements InstallStrategy {
         return await finish({
           ok: false,
           rootPath,
-          message: `Hermes 已安装到 ${rootPath}，但客户端复检仍未通过：${adapterHealth?.message ?? "未知错误"}。详情见安装日志：${logPath}`,
+          message: `Hermes 已安装，但客户端复检仍未通过：${adapterHealth?.message ?? "未知错误"}。详情见安装日志。`,
         }, "failed");
       }
 
-      return await finish({ ok: true, rootPath, message: `Hermes 已自动安装完成并通过检查：${rootPath}` }, "completed");
+      return await finish({ ok: true, rootPath, message: `Hermes 已自动安装完成并通过检查。` }, "completed");
     } catch (error) {
       if (signal?.aborted) {
         const rootPath = await this.resolveInstallRoot(options.rootPath).catch(() => this.defaultInstallRoot());
@@ -519,11 +523,11 @@ export class NativeInstallStrategy implements InstallStrategy {
           rootPath,
         }, "cancelled");
       }
-      const message = error instanceof Error ? error.message : String(error);
-      log.push(`Install crashed: ${message}`);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      log.push(`Install crashed: ${rawMessage}`);
       return await finish({
         ok: false,
-        message: `Hermes 自动安装失败：${message}`,
+        message: `Hermes 自动安装失败，请查看安装日志或导出诊断报告。`,
         rootPath: await this.resolveInstallRoot(options.rootPath).catch(() => this.defaultInstallRoot()),
       }, "failed");
     }
@@ -690,10 +694,10 @@ export class NativeInstallStrategy implements InstallStrategy {
         plan: await this.plan(),
       };
     } catch (error) {
-      const message = `${label} 自动修复流程异常：${error instanceof Error ? error.message : String(error)}`;
-      log.push(message);
-      await this.writeInstallLog(logDir, logPath, message, log);
-      return { ok: false, id, message, logPath, recommendedFix: `请手动安装 ${label} 后重启客户端。`, plan: await this.plan() };
+      const rawMessage = `${label} 自动修复流程异常：${error instanceof Error ? error.message : String(error)}`;
+      log.push(rawMessage);
+      await this.writeInstallLog(logDir, logPath, rawMessage, log);
+      return { ok: false, id, message: `${label} 自动修复流程异常，请查看修复日志或导出诊断报告。`, logPath, recommendedFix: `请手动安装 ${label} 后重启客户端。`, plan: await this.plan() };
     }
   }
 
@@ -832,21 +836,99 @@ export class NativeInstallStrategy implements InstallStrategy {
   }
 
   private async installPythonDependencies(rootPath: string, log: string[], python: PythonLauncher, emit?: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void) {
-    if (await this.exists(path.join(rootPath, "pyproject.toml"))) {
+    const hasPyproject = await this.exists(path.join(rootPath, "pyproject.toml"));
+    const hasRequirements = await this.exists(path.join(rootPath, "requirements.txt"));
+
+    // 1. Pre-clean quarantined packages (e.g. mistralai removed in 0.14.0)
+    await this.cleanQuarantinedPackages(rootPath, python, log);
+
+    // 2. Prefer uv sync if available (Hermes 0.14.0 officially uses uv)
+    const uvResult = await this.runLogged("uv", ["--version"], rootPath, log, 10_000).catch(() => undefined);
+    if (uvResult?.exitCode === 0 && hasPyproject) {
+      log.push(`uv ${uvResult.stdout.trim()} detected; using uv sync for faster dependency resolution.`);
+      emit?.("installing_dependencies", 65, "正在使用 uv 同步依赖（比 pip 更快更稳定）...", `uv ${uvResult.stdout.trim()}`);
+      const sync = await this.runLogged("uv", ["sync"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+        heartbeatMs: 20_000,
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在使用 uv 同步 Hermes 依赖。", `已等待 ${elapsedSeconds} 秒，如果卡住可检查网络或稍后重试。`),
+      }).catch(() => ({ exitCode: 1, stdout: "", stderr: "uv sync threw" } as Awaited<ReturnType<typeof runCommand>>));
+      if (sync.exitCode === 0) {
+        log.push("uv sync succeeded.");
+        return;
+      }
+      log.push("uv sync failed; falling back to pip install -e .");
+    }
+
+    // 3. pip install with China mirror fallback
+    if (hasPyproject) {
+      const pipEnv = await this.pipInstallEnvWithMirror();
       const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${pipEnv.PIP_INDEX_URL ? "（国内镜像）" : ""}`),
+        env: pipEnv,
       });
       if (result.exitCode !== 0) log.push("Editable pip install failed; continuing to health check so the user gets a precise runtime error.");
       return;
     }
-    if (await this.exists(path.join(rootPath, "requirements.txt"))) {
+    if (hasRequirements) {
+      const pipEnv = await this.pipInstallEnvWithMirror();
       const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-r", "requirements.txt"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${pipEnv.PIP_INDEX_URL ? "（国内镜像）" : ""}`),
+        env: pipEnv,
       });
       if (result.exitCode !== 0) log.push("requirements.txt pip install failed; continuing to health check so the user gets a precise runtime error.");
     }
+  }
+
+  /** 清理被 PyPI 隔离的损坏包（如 mistralai），避免依赖解析卡住 */
+  private async cleanQuarantinedPackages(rootPath: string, python: PythonLauncher, log: string[]) {
+    const quarantined = ["mistralai"];
+    for (const pkg of quarantined) {
+      try {
+        const check = await runCommand(python.command, [...python.argsPrefix, "-m", "pip", "show", pkg], {
+          cwd: rootPath,
+          timeoutMs: 15_000,
+          env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+        });
+        if (check.exitCode === 0) {
+          log.push(`Package ${pkg} is installed but quarantined by PyPI; uninstalling before update...`);
+          const uninstall = await runCommand(python.command, [...python.argsPrefix, "-m", "pip", "uninstall", pkg, "-y"], {
+            cwd: rootPath,
+            timeoutMs: 30_000,
+            env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+          });
+          log.push(uninstall.exitCode === 0 ? `Uninstalled ${pkg}.` : `Failed to uninstall ${pkg}: ${uninstall.stderr.slice(0, 200)}`);
+        }
+      } catch {
+        // ignore check errors
+      }
+    }
+  }
+
+  /** 检测网络环境，为中国大陆用户自动选择 PyPI 国内镜像 */
+  private async pipInstallEnvWithMirror(): Promise<Record<string, string>> {
+    const env: Record<string, string> = {
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8",
+      NO_COLOR: "1",
+    };
+    // Try connecting to official PyPI; if slow/unreachable, use Tsinghua mirror
+    try {
+      const start = Date.now();
+      const test = await runCommand("powershell.exe", ["-NoProfile", "-Command", "Invoke-WebRequest -Uri 'https://pypi.org/simple/' -UseBasicParsing -TimeoutSec 5 -MaximumRedirection 0; exit $LASTEXITCODE"], {
+        cwd: process.cwd(),
+        timeoutMs: 8_000,
+      });
+      const elapsed = Date.now() - start;
+      if (test.exitCode !== 0 || elapsed > 4000) {
+        env.PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
+        env.PIP_TRUSTED_HOST = "pypi.tuna.tsinghua.edu.cn";
+      }
+    } catch {
+      env.PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
+      env.PIP_TRUSTED_HOST = "pypi.tuna.tsinghua.edu.cn";
+    }
+    return env;
   }
 
   private async repairVenvBestEffort(rootPath: string, log: string[]) {
@@ -881,7 +963,8 @@ export class NativeInstallStrategy implements InstallStrategy {
     }
     const venvPython = path.join(venvDir, "Scripts", "python.exe");
     if (await this.exists(venvPython)) {
-      const install = await this.runLogged(venvPython, ["-m", "pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS).catch(() => undefined);
+      const pipEnv = await this.pipInstallEnvWithMirror();
+      const install = await this.runLogged(venvPython, ["-m", "pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, { env: pipEnv }).catch(() => undefined);
       if (install?.exitCode === 0) log.push("Hermes venv repaired through python -m venv + pip install -e .");
       else log.push("venv pip install failed; source CLI remains usable when health check passes.");
     }
@@ -936,19 +1019,65 @@ export class NativeInstallStrategy implements InstallStrategy {
       };
     }
 
-    const fetch = await this.runLogged("git", ["fetch", "origin", "--prune"], rootPath, log, 120_000);
+    // ── 1. Stash local modifications before pulling ───────────────────────
+    const statusResult = await this.runLogged("git", ["status", "--porcelain"], rootPath, log, 15_000);
+    const hasLocalChanges = statusResult.exitCode === 0 && statusResult.stdout.trim().length > 0;
+    let stashed = false;
+    if (hasLocalChanges) {
+      log.push("检测到本地有未提交的修改，正在自动 stash...");
+      const stash = await this.runLogged("git", ["stash", "push", "-m", "Forge auto-stash before update"], rootPath, log, 30_000);
+      if (stash.exitCode === 0) {
+        stashed = true;
+        log.push("本地修改已 stash，更新完成后自动恢复。");
+      } else {
+        log.push(`Git stash 失败：${stash.stderr.trim()}`);
+      }
+    }
+
+    // ── 2. Fetch with retry ──────────────────────────────────────────────
+    let fetch = await this.runLogged("git", ["fetch", "origin", "--prune"], rootPath, log, 180_000);
     if (fetch.exitCode !== 0) {
+      const isReset = fetch.stderr.includes("Connection was reset") || fetch.stderr.includes("ECONNRESET");
+      const isTimeout = fetch.stderr.includes("timed out") || fetch.stderr.includes("ETIMEDOUT");
+      log.push(`Git fetch 失败（${isReset ? "连接被重置" : isTimeout ? "超时" : "未知原因"}），3 秒后重试...`);
+      await new Promise((r) => setTimeout(r, 3000));
+      fetch = await this.runLogged("git", ["fetch", "origin", "--prune"], rootPath, log, 180_000);
+    }
+
+    if (fetch.exitCode !== 0) {
+      if (stashed) {
+        log.push("Fetch 失败，正在恢复 stash 的本地修改...");
+        await this.runLogged("git", ["stash", "pop"], rootPath, log, 30_000);
+      }
+      const originUrl = await this.gitText(rootPath, ["remote", "get-url", "origin"], log);
+      const isGitHub = originUrl?.includes("github.com");
+      const isReset = fetch.stderr.includes("Connection was reset") || fetch.stderr.includes("ECONNRESET");
+      const isTimeout = fetch.stderr.includes("timed out") || fetch.stderr.includes("ETIMEDOUT");
+      let hint: string;
+      if (isGitHub && isReset) {
+        hint = "检测到 Git 连接被重置（Connection was reset）。在中国大陆这是常见问题。解决方案：① 开启代理软件后执行 git config --global http.proxy http://127.0.0.1:你的代理端口 ② 或手动下载 zip 覆盖安装目录 ③ 或切换网络后重试。";
+      } else if (isGitHub && isTimeout) {
+        hint = "Git 连接超时。如果在中国大陆，建议开启代理或切换网络后重试。";
+      } else if (isGitHub) {
+        hint = "如果在中国大陆，可尝试设置 Git 代理（git config --global http.proxy http://127.0.0.1:你的代理端口）或切换网络后重试。";
+      } else {
+        hint = "请检查仓库地址、分支配置和网络连接。";
+      }
       return {
         ok: false,
         branch: currentBranch,
         currentCommit: headBefore,
-        message: "Hermes 更新失败：无法从 origin 获取最新代码，请检查网络连接或远程仓库配置。",
+        message: `Hermes 更新失败：无法从 origin 获取最新代码（已重试 1 次）。${hint}`,
       };
     }
 
     const remoteRef = `origin/${currentBranch}`;
     const latestCommit = await this.gitText(rootPath, ["rev-parse", "--short", remoteRef], log);
     if (!latestCommit) {
+      if (stashed) {
+        log.push("远程分支不存在，正在恢复 stash 的本地修改...");
+        await this.runLogged("git", ["stash", "pop"], rootPath, log, 30_000);
+      }
       return {
         ok: false,
         branch: currentBranch,
@@ -960,6 +1089,10 @@ export class NativeInstallStrategy implements InstallStrategy {
 
     const behindBefore = await this.gitCount(rootPath, ["rev-list", `HEAD..${remoteRef}`, "--count"], log);
     if (behindBefore === undefined) {
+      if (stashed) {
+        log.push("版本比较失败，正在恢复 stash 的本地修改...");
+        await this.runLogged("git", ["stash", "pop"], rootPath, log, 30_000);
+      }
       return {
         ok: false,
         branch: currentBranch,
@@ -971,8 +1104,12 @@ export class NativeInstallStrategy implements InstallStrategy {
     }
 
     if (behindBefore > 0) {
-      const pull = await this.runLogged("git", ["pull", "--ff-only", "origin", currentBranch], rootPath, log, 120_000);
+      const pull = await this.runLogged("git", ["pull", "--ff-only", "origin", currentBranch], rootPath, log, 180_000);
       if (pull.exitCode !== 0) {
+        if (stashed) {
+          log.push("Pull 失败，正在恢复 stash 的本地修改...");
+          await this.runLogged("git", ["stash", "pop"], rootPath, log, 30_000);
+        }
         return {
           ok: false,
           branch: currentBranch,
@@ -980,11 +1117,33 @@ export class NativeInstallStrategy implements InstallStrategy {
           currentCommit: headBefore,
           latestCommit,
           behindBefore,
-          message: `Hermes 更新失败：git pull origin ${currentBranch} 未成功，可能存在本地修改、分支分叉或网络问题。请处理冲突后重试。`,
+          message: `Hermes 更新失败：git pull origin ${currentBranch} 未成功。常见原因：① 网络超时（已延长至 180 秒）② 分支分叉（非 fast-forward）③ 远程仓库结构变更。建议：打开 Hermes Agent 目录执行 "git status" 查看状态，或点击"一键修复"重新安装。`,
         };
       }
     } else {
       log.push(`Git sync skipped pull because HEAD is already aligned with ${remoteRef}.`);
+    }
+
+    // ── 3. Pop stash and handle merge conflicts ───────────────────────────
+    if (stashed) {
+      log.push("更新完成，正在恢复 stash 的本地修改...");
+      const pop = await this.runLogged("git", ["stash", "pop"], rootPath, log, 30_000);
+      if (pop.exitCode !== 0 || pop.stdout.includes("CONFLICT") || pop.stderr.includes("CONFLICT")) {
+        const conflictFiles = await this.runLogged("git", ["diff", "--name-only", "--diff-filter=U"], rootPath, log, 15_000);
+        const conflicts = conflictFiles.stdout.trim().split("\n").filter(Boolean);
+        log.push(`Stash pop 产生冲突：${conflicts.join(", ") || "未知文件"}`);
+        return {
+          ok: false,
+          branch: currentBranch,
+          remoteRef,
+          currentCommit: await this.gitText(rootPath, ["rev-parse", "--short", "HEAD"], log) ?? headBefore,
+          latestCommit,
+          behindBefore,
+          behindAfter: 0,
+          message: `Hermes 代码已更新到 ${latestCommit}，但恢复你的本地修改时发生冲突。冲突文件：${conflicts.join(", ") || "未知"}。请手动解决冲突后重新检测状态。`,
+        };
+      }
+      log.push("本地修改已自动恢复。");
     }
 
     const behindAfter = await this.gitCount(rootPath, ["rev-list", `HEAD..${remoteRef}`, "--count"], log);
@@ -1114,7 +1273,7 @@ export class NativeInstallStrategy implements InstallStrategy {
 
   private async checkInstalledHermes(rootPath: string, log: string[], preferredPython?: PythonLauncher) {
     const cliPath = await resolveHermesCliPath(rootPath) ?? defaultHermesCliPath(rootPath);
-    if (!(await this.exists(cliPath))) return { available: false, message: `未找到 Hermes CLI：${cliPath}` };
+    if (!(await this.exists(cliPath))) return { available: false, message: `未找到 Hermes CLI，请检查安装路径。` };
     const hermesHome = await resolveActiveHermesHome(this.appPaths.hermesDir());
     const candidates: Array<{ command: string; args: string[] }> = [
       ...(isHermesCliExecutable(cliPath) ? [{ command: cliPath, args: ["--version"] as string[] }] : []),

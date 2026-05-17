@@ -85,11 +85,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
       }
     }
 
-    const timer = setTimeout(() => {
-      void detectHermes();
-    }, 400);
-
-    return () => clearTimeout(timer);
+    void detectHermes();
   }, []);
 
   useEffect(() => {
@@ -145,7 +141,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
     try {
       const result = await window.workbenchClient.repairSetupDependency(id);
       setMessage(result.message);
-      setDetail(result.recommendedFix ?? result.logPath ?? "");
+      setDetail(result.recommendedFix ?? "");
       await refreshSetupChecks();
     } catch (error) {
       setMessage("依赖修复失败");
@@ -176,7 +172,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
       const result = await window.workbenchClient.installHermes();
       installRunningRef.current = false;
       setMessage(result.message);
-      setDetail(result.logPath ? `安装日志：${result.logPath}` : detail);
+      setDetail(result.ok ? detail : "安装失败，请导出诊断报告查看详情。");
       setProgress(result.ok ? 100 : 0);
       void refreshSetupChecks();
 

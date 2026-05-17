@@ -104,7 +104,7 @@ export class HermesModelSyncService {
           model: codingProfile.model,
           provider: toHermesProvider(codingProfile),
           consumedByHermes: false,
-          syncNote: `Coding Plan 运行时解析失败，已跳过：${error instanceof Error ? error.message : String(error)}`,
+          syncNote: "Coding Plan 运行时解析失败，已跳过。"
         };
       }
     }

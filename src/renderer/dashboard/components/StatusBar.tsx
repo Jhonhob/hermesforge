@@ -42,7 +42,7 @@ export function StatusBar() {
       }
     }
     void refresh();
-    const timer = window.setInterval(refresh, 5000);
+    const timer = window.setInterval(refresh, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -95,34 +95,56 @@ export function StatusBar() {
   ], [apiStatus, clientUpdate, gatewayStatus, hermesStatus, hermesUpdate, lastChecked, store.hermesProbe, store.hermesStatus]);
 
   return (
-    <div className="hidden items-center gap-1 lg:flex">
-      {statusItems.map((item) => {
-        const Icon = item.icon;
-        return (
-          <button
-            key={item.key}
-            className={cn(
-              "hermes-status-chip inline-flex h-7 items-center gap-1.5 rounded-full border px-2 text-[10px] font-medium transition",
-              toneClass(item.tone),
-            )}
-            title={`${item.detail}${item.lastChecked ? ` · 最后检查 ${item.lastChecked}` : ""}`}
-            aria-label={item.detail}
-            type="button"
-          >
-            <span className={cn("inline-flex h-3.5 w-3.5 items-center justify-center", item.spinning && "animate-spin")}>
-              <Icon size={10} />
-            </span>
-            <span>{item.shortLabel}</span>
-            <span
-              data-testid={`status-light-${item.key}`}
-              className={cn("hermes-status-light", statusLightClass(item.tone), !item.glowing && !item.spinning && item.tone !== "error" && "hermes-status-light--idle")}
+    <>
+      {/* Small screen: compact status dots */}
+      <div className="flex items-center gap-1.5 lg:hidden">
+        {statusItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              className={cn("grid h-6 w-6 place-items-center rounded-full transition", toneClass(item.tone))}
+              title={item.detail}
+              aria-label={item.detail}
+              type="button"
             >
-              <span className="sr-only">{item.tone}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
+              <span className={cn("inline-flex items-center justify-center", item.spinning && "animate-spin")}>
+                <Icon size={10} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {/* Large screen: full status chips */}
+      <div className="hidden items-center gap-1 lg:flex">
+        {statusItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.key}
+              className={cn(
+                "hermes-status-chip inline-flex h-7 items-center gap-1.5 rounded-full border px-2 text-[10px] font-medium transition",
+                toneClass(item.tone),
+              )}
+              title={`${item.detail}${item.lastChecked ? ` · 最后检查 ${item.lastChecked}` : ""}`}
+              aria-label={item.detail}
+              type="button"
+            >
+              <span className={cn("inline-flex h-3.5 w-3.5 items-center justify-center", item.spinning && "animate-spin")}>
+                <Icon size={10} />
+              </span>
+              <span>{item.shortLabel}</span>
+              <span
+                data-testid={`status-light-${item.key}`}
+                className={cn("hermes-status-light", statusLightClass(item.tone), !item.glowing && !item.spinning && item.tone !== "error" && "hermes-status-light--idle")}
+              >
+                <span className="sr-only">{item.tone}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

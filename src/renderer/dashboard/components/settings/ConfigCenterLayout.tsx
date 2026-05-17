@@ -56,7 +56,7 @@ export function ConfigCenterLayout(props: {
   return (
     <section className="absolute inset-0 overflow-hidden bg-[#FAFAFA] text-slate-900">
       <div className="mx-auto flex h-full w-full max-w-6xl gap-5 px-5 py-4">
-        <aside className="h-fit w-[220px] shrink-0 rounded-2xl bg-white/95 p-2.5 shadow-[0_24px_90px_rgba(15,23,42,0.065)] ring-1 ring-slate-200/55 backdrop-blur">
+        <aside className="h-fit w-[220px] shrink-0 rounded-2xl bg-white p-2.5 shadow-[0_24px_90px_rgba(15,23,42,0.065)] ring-1 ring-slate-200/55">
           <div className="px-3 pb-3 pt-2">
             <h1 className="text-[16px] font-semibold tracking-[-0.01em] text-slate-950">
               {props.title ?? "配置中心"}

@@ -6,24 +6,38 @@ export interface SafeResult<T> {
   error?: string;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`操作超时（${Math.round(ms / 1000)}秒）`)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
 export async function safePromise<T>(
   promise: Promise<T>,
   options?: {
     errorMessage?: string;
     showNotification?: boolean;
+    timeoutMs?: number;
   }
 ): Promise<SafeResult<T>> {
-  const { errorMessage, showNotification = true } = options ?? {};
+  const { errorMessage, showNotification = true, timeoutMs } = options ?? {};
   const store = useAppStore.getState();
+  const wrapped = timeoutMs ? withTimeout(promise, timeoutMs) : promise;
 
   try {
-    const data = await promise;
+    const data = await wrapped;
     return { ok: true, data };
   } catch (error) {
-    const message = errorMessage ?? (error instanceof Error ? error.message : "操作失败");
-    
+    const message = error instanceof Error && error.message.includes("超时")
+      ? error.message
+      : errorMessage ?? "操作失败，请重试或导出诊断报告。";
+
     if (showNotification) {
-      store.error(message, error instanceof Error ? error.message : undefined);
+      store.error(message, undefined);
     }
 
     console.error("[safePromise] Error:", error);
@@ -37,6 +51,7 @@ export async function safePromiseWithFallback<T>(
   options?: {
     errorMessage?: string;
     showNotification?: boolean;
+    timeoutMs?: number;
   }
 ): Promise<T> {
   const result = await safePromise(promise, options);

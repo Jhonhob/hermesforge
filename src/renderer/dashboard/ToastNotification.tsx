@@ -1,5 +1,5 @@
 import { CheckCircle2, XCircle, AlertCircle, Info, X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { cn } from "./DashboardPrimitives";
 
 export type ToastType = "success" | "error" | "warning" | "info";
@@ -19,13 +19,28 @@ interface ToastProps {
 }
 
 export function ToastNotification(props: ToastProps) {
-  useEffect(() => {
-    const duration = props.toast.duration ?? 4000;
-    const timer = setTimeout(() => {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const remainingRef = useRef(props.toast.duration ?? 4000);
+  const startRef = useRef(Date.now());
+
+  const startTimer = useCallback(() => {
+    startRef.current = Date.now();
+    timerRef.current = setTimeout(() => {
       props.onClose(props.toast.id);
-    }, duration);
-    return () => clearTimeout(timer);
-  }, [props.toast.id, props.toast.duration, props.onClose]);
+    }, remainingRef.current);
+  }, [props.onClose, props.toast.id]);
+
+  const pauseTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      remainingRef.current -= Date.now() - startRef.current;
+    }
+  }, []);
+
+  useEffect(() => {
+    startTimer();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [startTimer]);
 
   const icon = {
     success: <CheckCircle2 size={18} />,
@@ -54,6 +69,8 @@ export function ToastNotification(props: ToastProps) {
         "group flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg transition-all duration-300 animate-slide-in",
         colors[props.toast.type]
       )}
+      onMouseEnter={pauseTimer}
+      onMouseLeave={startTimer}
     >
       <span className={cn("shrink-0", iconColors[props.toast.type])}>
         {icon[props.toast.type]}
@@ -66,6 +83,7 @@ export function ToastNotification(props: ToastProps) {
         className="shrink-0 rounded-md opacity-60 transition-opacity hover:opacity-100"
         onClick={() => props.onClose(props.toast.id)}
         type="button"
+        aria-label="关闭通知"
       >
         <X size={14} />
       </button>

@@ -53,9 +53,9 @@ const isSystemAuditMode = process.argv.includes("--system-audit") || process.env
 let mainWindow: BrowserWindow | undefined;
 let shutdownStarted = false;
 
+app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
+
 app.whenReady().then(async () => {
-  app.commandLine.appendSwitch("disable-gpu-shader-disk-cache");
-  
   const singleInstanceLock = isSystemAuditMode || app.requestSingleInstanceLock();
   if (!singleInstanceLock) {
     app.quit();

@@ -177,7 +177,7 @@ export class HermesCliAdapter implements EngineAdapter {
         label: this.label,
         available: false,
         mode: "cli",
-        message: error instanceof Error ? error.message : "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。",
+        message: "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。",
       };
     }
     const cliPath = this.hermesCliPath(rootPath, runtime);
@@ -188,7 +188,7 @@ export class HermesCliAdapter implements EngineAdapter {
         available: false,
         mode: "cli",
         path: rootPath,
-        message: `未找到 Hermes CLI，请确认 ${rootPath} 存在。`,
+        message: `未找到 Hermes CLI，请检查安装路径。`,
       };
     }
     if (runtime.mode === "wsl") {
@@ -249,8 +249,6 @@ export class HermesCliAdapter implements EngineAdapter {
       versionLooksValid = result.exitCode === 0 && versionOutput.length > 0;
     }
 
-    const failure = versionOutput
-      || `命令 ${launch.command} ${launch.args.join(" ")} 退出码 ${result.exitCode ?? "unknown"}`;
     return {
       engineId: this.id,
       label: this.label,
@@ -262,7 +260,7 @@ export class HermesCliAdapter implements EngineAdapter {
         ? "Hermes CLI 已接入真实本地安装。"
         : result.exitCode === 0
           ? "Hermes 检测失败：CLI 退出成功但没有输出版本信息，可能只是残留占位文件。请重新安装 / 修复安装。"
-          : `Hermes 检测失败：${failure}`,
+          : "Hermes 检测失败：启动异常，请重新安装 / 修复安装。",
     };
   }
 
@@ -677,7 +675,7 @@ export class HermesCliAdapter implements EngineAdapter {
         currentVersion: cliVersion,
         updateAvailable: false,
         sourceConfigured: true,
-        message: `Hermes 更新检查失败：${error instanceof Error ? error.message : String(error)}`,
+        message: `Hermes 更新检查失败，请检查网络或稍后重试。`,
       };
     }
   }
@@ -843,7 +841,7 @@ export class HermesCliAdapter implements EngineAdapter {
         reason: result.skippedReason,
       };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: "模型同步失败，请检查模型配置。" };
     }
   }
 
@@ -865,6 +863,7 @@ export class HermesCliAdapter implements EngineAdapter {
       "--workspace-path", workspacePath,
       "--source", "zhenghebao-client",
       "--max-turns", "90",
+      "--pass-session-id",
     ];
     if (historyPath) {
       args.push("--history-file", historyPath);
@@ -872,6 +871,9 @@ export class HermesCliAdapter implements EngineAdapter {
     const firstImage = request.attachments?.find((attachment) => attachment.kind === "image");
     if (firstImage) {
       args.push("--image-path", firstImage.path);
+    }
+    if (process.env.HERMES_IGNORE_RULES === "1") {
+      args.push("--skip-context-files", "--skip-memory");
     }
     // 注意：模型 / provider 通过 hermesEnv 写到 OPENAI_MODEL / HERMES_INFERENCE_PROVIDER
     // 等环境变量，hermes-windows-agent.py 直接读 env，不要在这里再 push --model /

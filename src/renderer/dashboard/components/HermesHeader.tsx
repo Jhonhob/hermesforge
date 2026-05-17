@@ -241,7 +241,7 @@ export function HermesHeader(props: {
   ];
 
   return (
-    <header className="hermes-header relative z-40 flex h-12 items-center justify-between border-b border-slate-200/70 bg-white/95 px-3 backdrop-blur-md" role="banner">
+    <header className="hermes-header relative z-40 flex h-12 items-center justify-between border-b border-slate-200/70 bg-white px-3" role="banner">
       <div className="flex min-w-0 items-center gap-2">
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-200/80 bg-slate-950 text-white shadow-[0_6px_16px_rgba(15,23,42,0.10)]"
@@ -343,7 +343,7 @@ export function HermesHeader(props: {
           </button>
 
           {showMenu ? (
-            <div className="hermes-popover absolute right-0 top-[calc(100%+10px)] z-[45] w-52 overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)] backdrop-blur-xl">
+            <div className="hermes-popover absolute right-0 top-[calc(100%+10px)] z-[45] w-52 overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
               {confirmingDelete ? (
                 <div className="p-2">
                   <p className="text-[13px] font-semibold text-rose-700">删除当前会话？</p>

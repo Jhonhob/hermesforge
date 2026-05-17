@@ -229,7 +229,7 @@ export class LegacyWslMigrationService {
         importedSkills.push(entry.name);
       } catch (error) {
         skippedSkills.push(entry.name);
-        warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
+        warnings.push(`${entry.name}: 复制失败，请检查文件权限。`);
       }
     }
     return { importedSkills, skippedSkills, skillConflicts, warnings };

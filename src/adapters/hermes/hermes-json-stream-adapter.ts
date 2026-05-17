@@ -11,6 +11,7 @@ export type ParsedJsonEvent =
   | { type: "tool_result"; tool: string; output?: string; success?: boolean; session_id?: string; timestamp: string }
   | { type: "message_chunk"; content: string; session_id?: string; timestamp: string }
   | { type: "reasoning"; content: string; session_id?: string; timestamp: string }
+  | { type: "clarify"; question: string; choices?: string[]; session_id?: string; timestamp: string }
   | { type: "status"; level?: string; message: string; session_id?: string; timestamp: string }
   | { type: "progress"; step: string; done?: boolean; message: string; session_id?: string; timestamp: string }
   | { type: "usage"; source?: string; input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; estimated_cost_usd?: number; session_id?: string; timestamp: string }
@@ -87,6 +88,15 @@ function toEngineEvent(parsed: ParsedJsonEvent): EngineEvent | undefined {
       return {
         type: "reasoning",
         content: String((parsed as Record<string, unknown>).content ?? ""),
+        at: now(),
+      };
+    }
+    case "clarify": {
+      const choices = (parsed as Record<string, unknown>).choices;
+      return {
+        type: "clarify",
+        question: String((parsed as Record<string, unknown>).question ?? ""),
+        choices: Array.isArray(choices) ? choices.filter((c): c is string => typeof c === "string") : undefined,
         at: now(),
       };
     }

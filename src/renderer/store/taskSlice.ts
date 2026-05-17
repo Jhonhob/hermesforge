@@ -204,12 +204,15 @@ function applyEngineEventToProjection(projection: TaskRunProjection, envelope: T
   const content = contentFromEngineEvent(event);
   if (event.type === "result") {
     const status = event.success ? "complete" : "failed";
+    const streamed = base.assistantMessage.content;
+    const resultContent = content ?? "";
+    const finalContent = chooseFinalAssistantContent(streamed, resultContent, base.status === "streaming");
     return {
       ...base,
       status,
       assistantMessage: {
         ...base.assistantMessage,
-        content: content ?? base.assistantMessage.content,
+        content: finalContent,
         status: statusForMessage(status),
         createdAt: base.assistantMessage.createdAt || event.at,
       },
@@ -218,7 +221,7 @@ function applyEngineEventToProjection(projection: TaskRunProjection, envelope: T
     };
   }
   if (content !== undefined) {
-    return appendAssistantContent(base, content, event.at, "streaming");
+    return appendAssistantContent(base, content, event.at, event.type === "message_chunk" ? "streaming" : "running");
   }
 
   if (event.type === "diagnostic" && base.status === "failed" && !base.assistantMessage.content) {
@@ -226,6 +229,13 @@ function applyEngineEventToProjection(projection: TaskRunProjection, envelope: T
   }
 
   return { ...base, updatedAt: event.at };
+}
+
+function chooseFinalAssistantContent(streamed: string, resultContent: string, hasStreamedAssistantText: boolean) {
+  if (!streamed) return resultContent;
+  if (!resultContent) return streamed;
+  if (!hasStreamedAssistantText) return resultContent;
+  return streamed.length > resultContent.length ? streamed : resultContent;
 }
 
 function normalizeStatus(status: unknown): TaskRunStatus {

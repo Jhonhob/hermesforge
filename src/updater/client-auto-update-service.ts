@@ -41,8 +41,9 @@ export class ClientAutoUpdateService {
       }
       return this.lastEvent;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "检查更新失败。";
-      this.publish(this.event("error", `客户端更新检查失败：${message}`, { manual }));
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = sanitizeUpdateError(raw);
+      this.publish(this.event("error", `客户端更新检查失败：${message}`, { manual, detail: raw }));
       return this.lastEvent;
     } finally {
       this.checking = false;
@@ -53,9 +54,19 @@ export class ClientAutoUpdateService {
     return this.lastEvent;
   }
 
-  downloadUpdate() {
-    if (!this.pendingUpdateInfo) return;
-    void autoUpdater.downloadUpdate();
+  async downloadUpdate(): Promise<ClientUpdateEvent> {
+    if (!this.pendingUpdateInfo) {
+      return this.event("error", "没有待下载的更新。");
+    }
+    try {
+      await autoUpdater.downloadUpdate();
+      return this.lastEvent;
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = sanitizeUpdateError(raw);
+      this.publish(this.event("error", `下载更新失败：${message}`, { detail: raw }));
+      return this.lastEvent;
+    }
   }
 
   installUpdate() {
@@ -115,8 +126,9 @@ export class ClientAutoUpdateService {
     });
 
     autoUpdater.on("error", (error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      this.publish(this.event("error", `自动更新失败：${message}`));
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = sanitizeUpdateError(raw);
+      this.publish(this.event("error", `自动更新失败：${message}`, { detail: raw }));
     });
   }
 
@@ -144,4 +156,52 @@ export class ClientAutoUpdateService {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 清理 electron-updater 的原始错误，提取用户友好的信息 */
+function sanitizeUpdateError(raw: string): string {
+  if (!raw) return "请检查网络连接或稍后重试。";
+
+  // GitHub 404 — release 或文件不存在
+  if (raw.includes("404") || raw.includes("Not Found")) {
+    return "服务器上没有找到该版本的安装包，可能已被删除或尚未上传。";
+  }
+
+  // 网络超时
+  if (raw.includes("ETIMEDOUT") || raw.includes("timeout") || raw.includes("TIMEOUT")) {
+    return "连接更新服务器超时，请检查网络或稍后重试。";
+  }
+
+  // 网络不可达
+  if (raw.includes("ECONNREFUSED") || raw.includes("ENOTFOUND") || raw.includes("getaddrinfo")) {
+    return "无法连接到更新服务器，请检查网络或代理设置。";
+  }
+
+  // SSL/TLS 证书错误
+  if (raw.includes("certificate") || raw.includes("SSL") || raw.includes("TLS")) {
+    return "网络证书验证失败，请检查系统时间是否正确，或尝试更换网络。";
+  }
+
+  // SHA checksum 不匹配
+  if (raw.includes("sha") || raw.includes("checksum") || raw.includes("hash")) {
+    return "安装包校验失败，可能下载不完整，请重新下载。";
+  }
+
+  // 磁盘/权限问题
+  if (raw.includes("EACCES") || raw.includes("permission") || raw.includes("EPERM")) {
+    return "文件写入权限不足，请以管理员身份运行应用。";
+  }
+
+  if (raw.includes("ENOSPC") || raw.includes("no space")) {
+    return "磁盘空间不足，请清理后再试。";
+  }
+
+  // 通用网络错误
+  if (raw.includes("network") || raw.includes("ECONNRESET") || raw.includes("EPIPE")) {
+    return "网络连接异常，请检查网络或稍后重试。";
+  }
+
+  // 删除过长的原始错误栈，保留核心信息
+  const short = raw.split("\n")[0].slice(0, 120);
+  return short.length > 60 ? `${short}...` : short;
 }
