@@ -1,5 +1,28 @@
 # Release Notes
 
+## Hermes Forge v0.2.18
+
+发布日期：2026-05-13
+
+这是一次根治安装卡死与自动更新体验的重构版本。重点解决 Windows 用户反馈的 Hermes Agent 安装长期卡在 55% 的问题，并重构自动更新流程，让用户对更新节奏有完全掌控。
+
+### 核心修复
+
+- **根治安装卡在 55%**：修复心跳进度硬编码 55% 的显示 bug，进度改为只增不减；新增安装日志实时透传与深色终端面板，用户可实时看到脚本在做什么。
+- **PowerShell 执行策略预检**：运行脚本前检测 `-ExecutionPolicy Bypass`，受限时直接报错而非干等。
+- **国内镜像自动切换**：后端自动探测 PyPI/清华/阿里/中科大速度，自动注入 pip/uv 镜像环境变量；安装开始时前端给出中文网络提示。
+- **Git/Python 缺失预修复**：进入 PowerShell 脚本前，先用 winget 主动安装 Git.Git 和 Python.Python.3.12，避免脚本在后台从 GitHub 慢速下载。
+- **GitHub 慢速前置检测**：ping + HTTP 延迟检测，慢速时 emit 中文提示建议切换国内社区镜像。
+
+### 体验调整
+
+- **自动更新 UI 重构**：关闭强制自动下载，改为用户可控弹窗；新增「跳过本次」与「稍后提醒」；更新弹窗展示 release notes；状态流转为 `available → downloading → downloaded`。
+
+### 验证
+
+- `npm run check` 通过
+- `npm test` 通过，45 个测试文件、326 个测试全部成功
+
 ## Hermes Forge v0.2.17
 
 发布日期：2026-05-11

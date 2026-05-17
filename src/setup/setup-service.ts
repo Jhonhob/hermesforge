@@ -6,7 +6,7 @@ import type { AppPaths } from "../main/app-paths";
 import type { RuntimeConfigStore } from "../main/runtime-config";
 import type { EngineAdapter } from "../adapters/engine-adapter";
 import type { SecretVault } from "../auth/secret-vault";
-import { runCommand } from "../process/command-runner";
+import { runCommand, streamCommand } from "../process/command-runner";
 import type {
   EngineMaintenanceResult,
   HermesCompatibilityReport,
@@ -194,7 +194,7 @@ export class SetupService {
       id: "hermes",
       label: "Hermes",
       status: "ok",
-      message: `Hermes CLI 已解析：${probe.paths.profileHermesPath.path}`,
+      message: `Hermes CLI 已解析。`,
       description: "Hermes root/CLI 结果来自统一 RuntimeProbe。",
       blocking: false,
     };
@@ -285,11 +285,11 @@ export class SetupService {
       }).catch(() => undefined);
       const branch = branchResult?.exitCode === 0 ? branchResult.stdout.trim() : "main";
 
-      const pullResult = await runCommand("git", ["pull", "origin", branch || "main"], {
+      const pullResult = await runCommand("git", ["pull", "--ff-only", "origin", branch || "main"], {
         cwd: hermesRoot,
-        timeoutMs: 60000,
+        timeoutMs: 180_000,
       }).catch((error) => ({ exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) } as Awaited<ReturnType<typeof runCommand>>));
-      log.push(`git pull origin ${branch || "main"}: exit ${pullResult.exitCode}`);
+      log.push(`git pull --ff-only origin ${branch || "main"}: exit ${pullResult.exitCode}`);
       if (pullResult.stdout.trim()) log.push(pullResult.stdout.trim());
       if (pullResult.stderr.trim()) log.push(pullResult.stderr.trim());
 
@@ -297,23 +297,26 @@ export class SetupService {
         emit("installing_dependencies", 75, "Git pull 失败，尝试强制同步...", pullResult.stderr.trim() || "未知错误");
         const fetchResult = await runCommand("git", ["fetch", "origin", branch || "main"], {
           cwd: hermesRoot,
-          timeoutMs: 60000,
+          timeoutMs: 180_000,
         }).catch(() => undefined);
         if (fetchResult?.exitCode === 0) {
           const hardReset = await runCommand("git", ["reset", "--hard", `origin/${branch || "main"}`], {
             cwd: hermesRoot,
-            timeoutMs: 10000,
+            timeoutMs: 30_000,
           }).catch(() => undefined);
           if (hardReset?.exitCode === 0) {
             log.push("git reset --hard origin/" + (branch || "main") + " succeeded");
           } else {
             log.push("git reset --hard failed: " + (hardReset?.stderr ?? "unknown"));
             ok = false;
-            message = "Hermes 更新失败：Git 代码同步失败，请检查网络或手动执行 git pull。";
+            message = "Hermes 更新失败：Git 代码同步失败。常见原因：① 网络超时（已延长至 180 秒）② 本地有未提交修改。建议：打开 Hermes Agent 目录执行 git status 查看状态，或尝试一键修复。";
           }
         } else {
+          const isReset = fetchResult?.stderr?.includes("Connection was reset") || fetchResult?.stderr?.includes("ECONNRESET");
           ok = false;
-          message = "Hermes 更新失败：无法从远程获取最新代码，请检查网络连接。";
+          message = isReset
+            ? "Hermes 更新失败：Git 连接被重置（Connection was reset）。在中国大陆这是常见问题。解决方案：① 开启代理软件后执行 git config --global http.proxy http://127.0.0.1:7890 ② 或手动下载 zip 覆盖安装目录。"
+            : "Hermes 更新失败：无法从远程获取最新代码（fetch 超时 180 秒）。如果在中国大陆，建议开启代理或切换网络后重试。";
         }
       }
 
@@ -331,21 +334,59 @@ export class SetupService {
       }
 
       if (ok && await this.exists(path.join(hermesRoot, "pyproject.toml"))) {
-        emit("installing_dependencies", 85, "正在更新 Python 依赖...", "pip install -e .");
-        const pipResult = await runCommand("python", ["-m", "pip", "install", "-e", "."], {
-          cwd: hermesRoot,
-          timeoutMs: 120000,
-          env: {
+        // Pre-clean quarantined packages before installing
+        for (const pkg of ["mistralai"]) {
+          try {
+            const show = await runCommand("python", ["-m", "pip", "show", pkg], { cwd: hermesRoot, timeoutMs: 10_000 });
+            if (show.exitCode === 0) {
+              log.push(`Quarantined package ${pkg} detected; uninstalling before update...`);
+              const un = await runCommand("python", ["-m", "pip", "uninstall", pkg, "-y"], { cwd: hermesRoot, timeoutMs: 30_000 });
+              log.push(un.exitCode === 0 ? `Uninstalled ${pkg}.` : `Failed to uninstall ${pkg}.`);
+            }
+          } catch { /* ignore */ }
+        }
+
+        // Prefer uv sync if available
+        const uvVersion = await runCommand("uv", ["--version"], { cwd: hermesRoot, timeoutMs: 10_000 }).catch(() => undefined);
+        if (uvVersion?.exitCode === 0) {
+          emit("installing_dependencies", 85, "正在使用 uv 同步依赖（比 pip 更快更稳定）...", `uv ${uvVersion.stdout.trim()}`);
+          const uvResult = await runCommand("uv", ["sync"], { cwd: hermesRoot, timeoutMs: 300_000 }).catch(() => undefined);
+          if (uvResult) {
+            log.push(`uv sync: exit ${uvResult.exitCode}`);
+            if (uvResult.stdout.trim()) log.push(uvResult.stdout.trim());
+            if (uvResult.stderr.trim()) log.push(uvResult.stderr.trim());
+          }
+        } else {
+          emit("installing_dependencies", 85, "正在更新 Python 依赖...", "pip install -e .");
+          const pipEnv: Record<string, string> = {
             PYTHONUTF8: "1",
             PYTHONIOENCODING: "utf-8",
             PYTHONPATH: `${hermesRoot}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
             NO_COLOR: "1",
-          },
-        }).catch(() => undefined);
-        if (pipResult) {
-          log.push(`pip install -e .: exit ${pipResult.exitCode}`);
-          if (pipResult.stdout.trim()) log.push(pipResult.stdout.trim());
-          if (pipResult.stderr.trim()) log.push(pipResult.stderr.trim());
+          };
+          // Auto-detect China mainland and use Tsinghua mirror
+          try {
+            const test = await runCommand("powershell.exe", ["-NoProfile", "-Command", "Invoke-WebRequest -Uri 'https://pypi.org/simple/' -UseBasicParsing -TimeoutSec 5 -MaximumRedirection 0; exit $LASTEXITCODE"], { cwd: process.cwd(), timeoutMs: 8_000 });
+            if (test.exitCode !== 0) {
+              pipEnv.PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
+              pipEnv.PIP_TRUSTED_HOST = "pypi.tuna.tsinghua.edu.cn";
+              log.push("PyPI appears slow/unreachable; using Tsinghua mirror for pip install.");
+            }
+          } catch {
+            pipEnv.PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
+            pipEnv.PIP_TRUSTED_HOST = "pypi.tuna.tsinghua.edu.cn";
+            log.push("PyPI connectivity check failed; using Tsinghua mirror for pip install.");
+          }
+          const pipResult = await runCommand("python", ["-m", "pip", "install", "-e", "."], {
+            cwd: hermesRoot,
+            timeoutMs: 300_000,
+            env: pipEnv,
+          }).catch(() => undefined);
+          if (pipResult) {
+            log.push(`pip install -e .: exit ${pipResult.exitCode}`);
+            if (pipResult.stdout.trim()) log.push(pipResult.stdout.trim());
+            if (pipResult.stderr.trim()) log.push(pipResult.stderr.trim());
+          }
         }
       }
     }
@@ -454,7 +495,7 @@ export class SetupService {
     const logDir = path.join(this.appPaths.baseDir(), "diagnostics", "install-logs");
     const logPath = path.join(logDir, `hermes-install-${startedAt.replace(/[:.]/g, "-")}.log`);
 
-    const emit = (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string) => {
+    const emit = (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string, extra?: Partial<HermesInstallEvent>) => {
       const line = `[${stage}] ${message}${detail ? ` | ${detail}` : ""}`;
       log.push(line);
       publish?.({
@@ -464,6 +505,7 @@ export class SetupService {
         progress,
         startedAt,
         at: new Date().toISOString(),
+        ...extra,
       });
     };
 
@@ -491,7 +533,7 @@ export class SetupService {
         const rootPath = currentHealth.path ?? await this.configStore.getEnginePath("hermes");
         await this.saveHermesRoot(rootPath);
         log.push(`Hermes is already available at ${rootPath}.`);
-        return await finish({ ok: true, rootPath, message: `已检测到可用 Hermes：${rootPath}` }, "completed");
+        return await finish({ ok: true, rootPath, message: `已检测到可用 Hermes。` }, "completed");
       }
 
       const repoUrl = process.env.HERMES_INSTALL_REPO_URL?.trim() || DEFAULT_HERMES_REPO_URL;
@@ -532,7 +574,7 @@ export class SetupService {
             return await finish({
               ok: false,
               rootPath,
-              message: `目标目录已存在但看起来不是可自动恢复的 Hermes 安装：${rootPath}。请在设置里改用空目录，或手动清理后重试。`,
+              message: `目标目录已存在但看起来不是可自动恢复的 Hermes 安装。请在设置里改用空目录，或手动清理后重试。`,
             }, "failed");
           }
           emit("recovering", 18, "检测到上次残留的 Hermes 安装目录，正在自动迁移旧残留。", rootPath);
@@ -549,10 +591,11 @@ export class SetupService {
         const clone = await this.runLogged("git", ["clone", "--depth", "1", repoUrl, stagingPath], parentDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
           heartbeatMs: 15_000,
           onHeartbeat: (elapsedSeconds) => emit("cloning", 34, "仍在下载 Hermes 核心文件，请保持网络连接。", `已等待 ${elapsedSeconds} 秒，源：${repoUrl}`),
+          onLine: (line) => emit("cloning", 34, "正在下载...", line, { logLine: line }),
         });
         if (clone.exitCode !== 0) {
           await this.cleanupDirectory(stagingPath, log);
-          return await finish({ ok: false, rootPath, message: `Hermes 下载失败，详情见安装日志：${logPath}` }, "failed");
+          return await finish({ ok: false, rootPath, message: `Hermes 下载失败，详情见安装日志。` }, "failed");
         }
 
         await fs.rename(stagingPath, rootPath);
@@ -569,7 +612,7 @@ export class SetupService {
         return await finish({
           ok: false,
           rootPath,
-          message: `Hermes 文件已落地到 ${rootPath}，但本地自检未通过：${localHealth.message}。详情见安装日志：${logPath}`,
+          message: `Hermes 文件已落地，但本地自检未通过：${localHealth.message}。详情见安装日志。`,
         }, "failed");
       }
 
@@ -586,11 +629,11 @@ export class SetupService {
         return await finish({
           ok: false,
           rootPath,
-          message: `Hermes 已安装到 ${rootPath}，但客户端复检仍未通过：${adapterHealth?.message ?? "未知错误"}。详情见安装日志：${logPath}`,
+          message: `Hermes 已安装，但客户端复检仍未通过：${adapterHealth?.message ?? "未知错误"}。详情见安装日志。`,
         }, "failed");
       }
 
-      return await finish({ ok: true, rootPath, message: `Hermes 已自动安装完成并通过检查：${rootPath}` }, "completed");
+      return await finish({ ok: true, rootPath, message: `Hermes 已自动安装完成并通过检查。` }, "completed");
     } catch (error) {
       if (stagingPath) {
         await this.cleanupDirectory(stagingPath, log);
@@ -599,7 +642,7 @@ export class SetupService {
       log.push(`Install crashed: ${message}`);
       return await finish({
         ok: false,
-        message: `Hermes 自动安装失败：${message}`,
+        message: `Hermes 自动安装失败，请查看安装日志或导出诊断报告。`,
         rootPath: quarantinedPath ? path.dirname(quarantinedPath) : undefined,
       }, "failed");
     }
@@ -658,7 +701,7 @@ export class SetupService {
         recommendedFix: ok ? "重启客户端并重新打开系统状态页确认依赖是否就绪。" : `请手动安装 ${label} 后重试。`,
       };
     } catch (error) {
-      const message = `${label} 自动修复流程异常：${error instanceof Error ? error.message : String(error)}`;
+      const message = `${label} 自动修复流程异常，请查看修复日志或导出诊断报告。`;
       log.push(message);
       await this.writeInstallLog(logDir, logPath, message, log);
       return {
@@ -774,7 +817,7 @@ export class SetupService {
       id: "hermes",
       label: "Hermes",
       status: "ok",
-      message: `${health.message} 记忆目录：${memoryDir}`,
+      message: `${health.message}`,
       blocking: false,
     };
   }
@@ -840,13 +883,13 @@ export class SetupService {
       const probe = path.join(targetPath, `.zhenghebao-write-test-${Date.now()}`);
       await fs.writeFile(probe, "ok", "utf8");
       await fs.unlink(probe);
-      return { id, label, status: "ok", message: `${targetPath} 可写。`, blocking: false };
+      return { id, label, status: "ok", message: `目录可写。`, blocking: false };
     } catch (error) {
       return {
         id,
         label,
         status: "failed",
-        message: `${targetPath} 不可写：${error instanceof Error ? error.message : "未知错误"}`,
+        message: `目录不可写，请检查权限或更换安装位置。`,
         fixAction: "open_settings",
         blocking: true,
       };
@@ -944,12 +987,22 @@ export class SetupService {
     rootPath: string,
     log: string[],
     python: PythonLauncher,
-    emit?: (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string) => void,
+    emit?: (stage: HermesInstallEvent["stage"], progress: number, message: string, detail?: string, extra?: Partial<HermesInstallEvent>) => void,
   ) {
+    const mirror = await this.detectPipMirror(log);
+    const pipArgs = (baseArgs: string[]) => {
+      if (mirror) {
+        log.push(`Using pip mirror: ${mirror}`);
+        return [...baseArgs, "-i", mirror];
+      }
+      return baseArgs;
+    };
+
     if (await this.exists(path.join(rootPath, "pyproject.toml"))) {
-      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", ...pipArgs(["install", "-e", "."])], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${mirror ? "，国内镜像：" + mirror : ""}`),
+        onLine: (line) => emit?.("installing_dependencies", 68, "正在安装依赖...", line, { logLine: line }),
       });
       if (result.exitCode !== 0) {
         log.push("Editable pip install failed; continuing to health check so the user gets a precise runtime error.");
@@ -957,14 +1010,55 @@ export class SetupService {
       return;
     }
     if (await this.exists(path.join(rootPath, "requirements.txt"))) {
-      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", "install", "-r", "requirements.txt"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+      const result = await this.runLogged(python.command, [...python.argsPrefix, "-m", "pip", ...pipArgs(["install", "-r", "requirements.txt"])], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 15_000,
-        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}`),
+        onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在安装 Hermes Python 依赖。", `已等待 ${elapsedSeconds} 秒，使用 ${python.label}${mirror ? "，国内镜像：" + mirror : ""}`),
+        onLine: (line) => emit?.("installing_dependencies", 68, "正在安装依赖...", line, { logLine: line }),
       });
       if (result.exitCode !== 0) {
         log.push("requirements.txt pip install failed; continuing to health check so the user gets a precise runtime error.");
       }
     }
+  }
+
+  private async detectPipMirror(log: string[]): Promise<string | undefined> {
+    const mirrors = [
+      { url: "https://pypi.tuna.tsinghua.edu.cn/simple", label: "清华" },
+      { url: "https://mirrors.aliyun.com/pypi/simple", label: "阿里云" },
+      { url: "https://pypi.mirrors.ustc.edu.cn/simple", label: "中科大" },
+    ];
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const start = Date.now();
+      await fetch("https://pypi.org/simple/", { method: "HEAD", signal: controller.signal });
+      clearTimeout(timer);
+      const elapsed = Date.now() - start;
+      if (elapsed < 2000) {
+        log.push(`PyPI official is fast (${elapsed}ms), using default index.`);
+        return undefined;
+      }
+      log.push(`PyPI official is slow (${elapsed}ms), probing mirrors...`);
+    } catch {
+      log.push("PyPI official is unreachable, probing mirrors...");
+    }
+
+    for (const mirror of mirrors) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const start = Date.now();
+        await fetch(mirror.url, { method: "HEAD", signal: controller.signal });
+        clearTimeout(timer);
+        const elapsed = Date.now() - start;
+        log.push(`Mirror ${mirror.label} is available (${elapsed}ms).`);
+        return mirror.url;
+      } catch {
+        log.push(`Mirror ${mirror.label} probe failed.`);
+      }
+    }
+    log.push("All mirrors unreachable, falling back to default index.");
+    return undefined;
   }
 
   private async saveHermesRoot(rootPath: string) {
@@ -998,7 +1092,7 @@ export class SetupService {
     cwd: string,
     log: string[],
     timeoutMs: number,
-    heartbeat?: { heartbeatMs: number; onHeartbeat: (elapsedSeconds: number) => void },
+    heartbeat?: { heartbeatMs: number; onHeartbeat: (elapsedSeconds: number) => void; onLine?: (line: string) => void },
   ) {
     log.push(`$ ${command} ${args.join(" ")}`);
     const startedAt = Date.now();
@@ -1009,14 +1103,35 @@ export class SetupService {
           heartbeat.onHeartbeat(elapsedSeconds);
         }, heartbeat.heartbeatMs)
       : undefined;
-    const result = await runCommand(command, args, { cwd, timeoutMs });
-    if (timer) {
-      clearInterval(timer);
+    try {
+      if (!heartbeat?.onLine) {
+        const result = await runCommand(command, args, { cwd, timeoutMs });
+        if (result.stdout.trim()) log.push(result.stdout.trim());
+        if (result.stderr.trim()) log.push(result.stderr.trim());
+        log.push(`exit ${result.exitCode ?? "unknown"}`);
+        return result;
+      }
+
+      let stdout = "";
+      let stderr = "";
+      let exitCode: number | null = null;
+      for await (const event of streamCommand(command, args, { cwd, timeoutMs })) {
+        if (event.type === "stdout" || event.type === "stderr") {
+          const line = event.line.trim();
+          if (!line) continue;
+          if (event.type === "stdout") stdout += `${line}\n`;
+          else stderr += `${line}\n`;
+          log.push(line);
+          heartbeat.onLine(line);
+        } else {
+          exitCode = event.exitCode;
+        }
+      }
+      log.push(`exit ${exitCode ?? "unknown"}`);
+      return { exitCode, stdout, stderr };
+    } finally {
+      if (timer) clearInterval(timer);
     }
-    if (result.stdout.trim()) log.push(result.stdout.trim());
-    if (result.stderr.trim()) log.push(result.stderr.trim());
-    log.push(`exit ${result.exitCode ?? "unknown"}`);
-    return result;
   }
 
   private async checkCommand(
@@ -1286,7 +1401,7 @@ export class SetupService {
   private async checkInstalledHermes(rootPath: string, log: string[], preferredPython?: PythonLauncher) {
     const cliPath = path.join(rootPath, "hermes");
     if (!(await this.exists(cliPath))) {
-      return { available: false, message: `未找到 Hermes CLI：${cliPath}` };
+      return { available: false, message: `未找到 Hermes CLI，请检查安装路径。` };
     }
 
     const candidates: Array<{ command: string; args: string[] }> = [
@@ -1313,8 +1428,8 @@ export class SetupService {
       }
       lastMessage = output || (
         result.exitCode === 0
-          ? `${candidate.command} 成功退出但没有输出 Hermes 版本信息，可能只是残留占位文件。`
-          : `${candidate.command} 退出码 ${result.exitCode ?? "unknown"}`
+          ? `启动成功但没有返回版本信息，可能只是残留占位文件。`
+          : `启动失败，退出码 ${result.exitCode ?? "unknown"}`
       );
     }
     return { available: false, message: lastMessage };
@@ -1450,7 +1565,7 @@ export class SetupService {
 
     const health = await this.hermes.healthCheck().catch((error) => ({
       available: false,
-      message: error instanceof Error ? error.message : String(error),
+      message: "健康检查失败，请检查 Hermes 安装状态。"
     }));
     if (!health.available) {
       return {

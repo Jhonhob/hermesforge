@@ -301,7 +301,7 @@ export async function deepTestModelConnection(input: {
   } catch (error) {
     return {
       ok: false,
-      message: `运行时解析异常：${error instanceof Error ? error.message : String(error)}`,
+      message: "模型运行时配置解析失败，请检查模型设置。",
       model: profile.model,
       sourceType: normalizeSourceType(profile.sourceType),
       runtimeResolutionOk: false,

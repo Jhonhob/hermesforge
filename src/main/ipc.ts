@@ -156,6 +156,8 @@ const kanbanTaskActionSchema = z.object({
   assignee: z.string().trim().max(120).optional(),
   reason: z.string().trim().max(1000).optional(),
   result: z.string().trim().max(4000).optional(),
+  summary: z.string().trim().max(4000).optional(),
+  reclaim: z.boolean().optional(),
 });
 const kanbanTaskRefSchema = z.object({
   board: kanbanSlugSchema.optional(),
@@ -617,6 +619,18 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
   });
 
   ipcMain.handle(IpcChannels.checkClientUpdate, () => services.clientAutoUpdateService.checkForUpdates(true));
+  ipcMain.handle(IpcChannels.downloadClientUpdate, async () => {
+    const event = await services.clientAutoUpdateService.downloadUpdate();
+    return { ok: event.status !== "error", event };
+  });
+  ipcMain.handle(IpcChannels.installClientUpdate, () => {
+    services.clientAutoUpdateService.installUpdate();
+    return { ok: true };
+  });
+  ipcMain.handle(IpcChannels.skipClientUpdate, (_event, version: string) => {
+    services.clientAutoUpdateService.skipVersion(version);
+    return { ok: true };
+  });
 
   ipcMain.handle(IpcChannels.updateHermes, (event) =>
     services.setupService.updateHermes((payload) => {

@@ -190,7 +190,7 @@ export function DashboardView(props: {
           {!store.sessionSidebarOpen ? (
             <button
               aria-label="显示历史会话栏"
-              className="absolute left-2 top-3 z-20 grid h-9 w-9 place-items-center rounded-xl border border-slate-200/80 bg-white/95 text-slate-500 shadow-[0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur transition hover:border-[var(--hermes-primary-border)] hover:bg-[var(--hermes-primary-soft)] hover:text-[var(--hermes-primary)]"
+              className="absolute left-2 top-3 z-20 grid h-9 w-9 place-items-center rounded-xl border border-slate-200/80 bg-white text-slate-500 shadow-[0_10px_28px_rgba(15,23,42,0.12)] transition hover:border-[var(--hermes-primary-border)] hover:bg-[var(--hermes-primary-soft)] hover:text-[var(--hermes-primary)]"
               onClick={() => store.setSessionSidebarOpen(true)}
               title="显示历史会话栏"
               type="button"

@@ -4,6 +4,7 @@ import type { WorkspaceSpace } from "../../../../shared/types";
 import { useAppStore } from "../../../store";
 import { ConfirmCard } from "../ConfirmCard";
 import { NoticeCard } from "../NoticeCard";
+import { cn } from "../../DashboardPrimitives";
 
 export function SpacesPanel(props: { onSelect: (path: string) => void }) {
   const store = useAppStore();
@@ -97,14 +98,17 @@ export function SpacesPanel(props: { onSelect: (path: string) => void }) {
             />
           </div>
           <div className="mt-3 flex items-center justify-between">
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={editing.pinned}
-                onChange={(event) => setEditing({ ...editing, pinned: event.target.checked })}
-              />
+            <button
+              aria-pressed={Boolean(editing.pinned)}
+              className="flex items-center gap-2 text-sm text-slate-600"
+              onClick={() => setEditing({ ...editing, pinned: !editing.pinned })}
+              type="button"
+            >
+              <span className={cn("relative h-5 w-9 rounded-full transition", editing.pinned ? "bg-slate-950" : "bg-slate-200")}>
+                <span className={cn("absolute top-1 h-3 w-3 rounded-full bg-white shadow-sm transition", editing.pinned ? "left-5" : "left-1")} />
+              </span>
               置顶
-            </label>
+            </button>
             <div className="flex gap-2">
               <button
                 className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 transition-colors hover:bg-slate-100"

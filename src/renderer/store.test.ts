@@ -245,6 +245,51 @@ describe("renderer store task projections", () => {
     expect(projection.status).toBe("complete");
   });
 
+  it("keeps the longer streamed assistant content when the final result is a shorter summary", () => {
+    const taskRunId = "task-long-stream";
+    const workSessionId = "session-1";
+    const streamedContent = [
+      "第一段：这是模型已经流式写出来的完整内容。",
+      "第二段：这里包含用户真正需要看到的细节。",
+      "第三段：如果最终 result 只是摘要，不应该覆盖这些内容。",
+    ].join("\n");
+
+    useAppStore.getState().beginTaskRun({
+      workSessionId,
+      taskRunId,
+      userInput: "请详细分析",
+      createdAt: "2026-04-18T10:00:00.000Z",
+    });
+    useAppStore.getState().applyTaskEvent({
+      taskRunId,
+      workSessionId,
+      sessionId: taskRunId,
+      engineId: "hermes",
+      event: {
+        type: "message_chunk",
+        content: streamedContent,
+        at: "2026-04-18T10:00:01.000Z",
+      },
+    });
+    useAppStore.getState().applyTaskEvent({
+      taskRunId,
+      workSessionId,
+      sessionId: taskRunId,
+      engineId: "hermes",
+      event: {
+        type: "result",
+        success: true,
+        title: "Hermes 回复",
+        detail: "简短摘要。",
+        at: "2026-04-18T10:00:02.000Z",
+      },
+    });
+
+    const projection = useAppStore.getState().taskRunProjectionsById[taskRunId];
+    expect(projection.assistantMessage.content).toBe(streamedContent);
+    expect(projection.status).toBe("complete");
+  });
+
   it("marks unfinished historical placeholder runs as interrupted", () => {
     useAppStore.setState({
       conversationMessages: [

@@ -166,6 +166,9 @@ const IpcChannels = {
   checkUpdates: "updates:check",
   checkClientUpdate: "updates:client-check",
   clientUpdateEvent: "updates:client-event",
+  downloadClientUpdate: "updates:client-download",
+  installClientUpdate: "updates:client-install",
+  skipClientUpdate: "updates:client-skip",
   updateHermes: "updates:hermes",
   installHermes: "setup:install-hermes",
   cancelInstallHermes: "setup:cancel-install-hermes",
@@ -376,6 +379,9 @@ const api = {
     ipcRenderer.invoke(IpcChannels.probeHermes, workspacePath) as Promise<EngineWarmupResult>,
   checkUpdates: () => ipcRenderer.invoke(IpcChannels.checkUpdates) as Promise<EngineUpdateStatus[]>,
   checkClientUpdate: () => ipcRenderer.invoke(IpcChannels.checkClientUpdate) as Promise<ClientUpdateEvent>,
+  downloadClientUpdate: () => ipcRenderer.invoke(IpcChannels.downloadClientUpdate) as Promise<{ ok: boolean }>,
+  installClientUpdate: () => ipcRenderer.invoke(IpcChannels.installClientUpdate) as Promise<{ ok: boolean }>,
+  skipClientUpdate: (version: string) => ipcRenderer.invoke(IpcChannels.skipClientUpdate, version) as Promise<{ ok: boolean }>,
   onClientUpdateEvent: (callback: (event: ClientUpdateEvent) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: ClientUpdateEvent) => callback(payload);
     ipcRenderer.on(IpcChannels.clientUpdateEvent, wrapped);

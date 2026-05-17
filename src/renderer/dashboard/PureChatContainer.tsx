@@ -46,7 +46,7 @@ export function PureChatContainer(props: {
     if (followBottom) {
       if (scrollFrameRef.current) cancelAnimationFrame(scrollFrameRef.current);
       scrollFrameRef.current = requestAnimationFrame(() => {
-        bottomRef.current?.scrollIntoView({ block: "end", behavior: visibleRuns.length > 1 ? "smooth" : "auto" });
+        bottomRef.current?.scrollIntoView({ block: "end", behavior: "auto" });
         scrollFrameRef.current = null;
       });
     }
@@ -82,7 +82,7 @@ export function PureChatContainer(props: {
 
       {!followBottom ? (
         <button
-          className="absolute bottom-32 left-1/2 z-10 -translate-x-1/2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
+          className="sticky bottom-4 left-1/2 z-10 -translate-x-1/2 self-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
           onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
           type="button"
         >
@@ -130,10 +130,10 @@ function PendingNativeCards() {
           {card.command ? <code className="mt-2 block rounded-xl bg-slate-50 p-2 text-[12px] text-slate-600">{card.command}</code> : null}
           {card.details ? <p className="mt-2 text-[12px] text-slate-500">{card.details}</p> : null}
           <div className="mt-3 flex flex-wrap gap-2">
-            <button className="rounded-full bg-slate-900 px-3 py-1.5 text-[12px] font-semibold text-white" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "once", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved"))} type="button">本次允许</button>
-            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "session", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved"))} type="button">本会话允许</button>
-            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "always", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved"))} type="button">始终允许</button>
-            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "deny" }).then(() => store.resolveApprovalCard(card.id, "denied"))} type="button">拒绝</button>
+            <button className="rounded-full bg-slate-900 px-3 py-1.5 text-[12px] font-semibold text-white" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "once", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved")).catch((err) => store.error("审批操作失败", err instanceof Error ? err.message : "未知错误"))} type="button">本次允许</button>
+            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "session", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved")).catch((err) => store.error("审批操作失败", err instanceof Error ? err.message : "未知错误"))} type="button">本会话允许</button>
+            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "always", editedCommand: card.command }).then(() => store.resolveApprovalCard(card.id, "approved")).catch((err) => store.error("审批操作失败", err instanceof Error ? err.message : "未知错误"))} type="button">始终允许</button>
+            <button className="rounded-full border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-600" onClick={() => void window.workbenchClient.respondApproval({ id: card.id, choice: "deny" }).then(() => store.resolveApprovalCard(card.id, "denied")).catch((err) => store.error("审批操作失败", err instanceof Error ? err.message : "未知错误"))} type="button">拒绝</button>
           </div>
         </div>
       ))}

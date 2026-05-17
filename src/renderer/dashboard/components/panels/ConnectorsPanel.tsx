@@ -402,15 +402,7 @@ export function ConnectorsPanel() {
             </button>
           </div>
 
-          <label className="mb-4 flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-            <input
-              checked={formEnabled}
-              className="h-4 w-4 accent-indigo-600"
-              onChange={(event) => setFormEnabled(event.target.checked)}
-              type="checkbox"
-            />
-            启用并允许同步到 Hermes .env
-          </label>
+          <ToggleRow checked={formEnabled} label="启用并允许同步到 Hermes .env" onChange={setFormEnabled} />
 
           {editorConfig ? (
             <section className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4">
@@ -793,6 +785,7 @@ function WeixinQrWizard(props: {
   onInstallDependency(): Promise<void>;
   onClose(): void;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [copied, setCopied] = useState(false);
   const status = props.status ?? { running: false, phase: "idle" as const, message: "请点击开始扫码获取微信二维码。" };
@@ -824,6 +817,43 @@ function WeixinQrWizard(props: {
     };
   }, [status.qrUrl]);
 
+  // Focus trap: keep Tab inside modal, Escape to close
+  useEffect(() => {
+    if (!props.open) return;
+    const el = dialogRef.current;
+    if (!el) return;
+
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        props.onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusable = Array.from(el!.querySelectorAll<HTMLElement>(focusableSelector)).filter((n) => !(n instanceof HTMLButtonElement && n.disabled) && n.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+
+    el.addEventListener("keydown", onKeyDown);
+    // Auto-focus first interactive element
+    const firstFocusable = el.querySelector<HTMLElement>(focusableSelector);
+    firstFocusable?.focus();
+
+    return () => el.removeEventListener("keydown", onKeyDown);
+  }, [props.open, props.onClose]);
+
   if (!props.open) return null;
 
   async function copyQrLink() {
@@ -834,7 +864,7 @@ function WeixinQrWizard(props: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm">
+    <div ref={dialogRef} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="微信扫码接入">
       <section className="w-full max-w-3xl overflow-hidden rounded-xl bg-white shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
           <div>
@@ -1051,15 +1081,7 @@ function FieldEditor(props: {
   const { field } = props;
   if (field.type === "boolean") {
     return (
-      <label className="flex min-h-[76px] items-center gap-2 rounded-lg border border-slate-100 px-3 py-2 text-sm text-slate-600">
-        <input
-          checked={Boolean(props.value)}
-          className="h-4 w-4 accent-indigo-600"
-          onChange={(event) => props.onChange(event.target.checked)}
-          type="checkbox"
-        />
-        <span>{field.label}{field.required ? " *" : ""}</span>
-      </label>
+      <ToggleRow checked={Boolean(props.value)} label={`${field.label}${field.required ? " *" : ""}`} onChange={props.onChange} framed />
     );
   }
   return (
@@ -1077,6 +1099,25 @@ function FieldEditor(props: {
       />
       <span className="mt-1 block truncate font-mono text-[11px] text-slate-400">{field.envVar}</span>
     </label>
+  );
+}
+
+function ToggleRow(props: { checked: boolean; label: string; onChange: (checked: boolean) => void; framed?: boolean }) {
+  return (
+    <button
+      aria-pressed={props.checked}
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-600 transition hover:bg-slate-50",
+        props.framed ? "min-h-[76px] border border-slate-100 bg-white" : "mb-4 bg-slate-50",
+      )}
+      onClick={() => props.onChange(!props.checked)}
+      type="button"
+    >
+      <span>{props.label}</span>
+      <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition", props.checked ? "bg-indigo-600" : "bg-slate-200")}>
+        <span className={cn("absolute top-1 h-3 w-3 rounded-full bg-white shadow-sm transition", props.checked ? "left-5" : "left-1")} />
+      </span>
+    </button>
   );
 }
 

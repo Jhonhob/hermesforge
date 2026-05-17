@@ -72,7 +72,7 @@ export function SupportView(props: { onBack: () => void }) {
 
   return (
     <section className="hermes-support-page flex min-h-screen flex-col bg-[#f7f8fb] text-slate-900">
-      <header className="hermes-support-header flex h-[58px] items-center justify-between border-b border-slate-200/70 bg-white/95 px-6 backdrop-blur-md">
+      <header className="hermes-support-header flex h-[58px] items-center justify-between border-b border-slate-200/70 bg-white px-6">
         <button
           className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           onClick={props.onBack}

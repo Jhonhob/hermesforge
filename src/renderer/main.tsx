@@ -718,6 +718,26 @@ function SetupCheckCard(props: {
   );
 }
 
+function DiagnosticDetails(props: { details: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-[11px] text-slate-500 underline decoration-slate-300 underline-offset-2 hover:text-slate-700"
+      >
+        {open ? "收起详情" : "查看详情（供技术支持使用）"}
+      </button>
+      {open ? (
+        <pre className="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950/90 p-2 text-[11px] leading-4 text-slate-100">
+          {props.details}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
 function OneClickDiagnosticsResultView(props: { report: OneClickDiagnosticsReport }) {
   return (
     <SettingsPanelCard title="一键诊断结果">
@@ -746,9 +766,7 @@ function OneClickDiagnosticsResultView(props: { report: OneClickDiagnosticsRepor
                 </div>
               ) : null}
               {diagnostic.details ? (
-                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-950/90 p-2 text-[11px] leading-4 text-slate-100">
-                  {diagnostic.details}
-                </pre>
+                <DiagnosticDetails details={diagnostic.details} />
               ) : null}
             </div>
           ))}
@@ -1762,7 +1780,7 @@ try {
             抱歉，应用启动时遇到了错误。请尝试重新启动应用。
           </p>
           <pre style="background: #f3f4f6; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; color: #374151; max-height: 200px; overflow-y: auto;">
-${error instanceof Error ? error.message : String(error)}
+应用渲染初始化失败，请尝试重启客户端。如问题持续，请导出诊断报告或联系技术支持。
           </pre>
           <p style="font-size: 12px; color: #9ca3af; margin-top: 16px;">
             如果问题持续存在，请检查控制台获取更多详细信息。

@@ -1,6 +1,6 @@
 {
   "name": "hermes-forge",
-  "version": "0.2.18",
+  "version": "0.2.19",
   "description": "本地优先的 Hermes Agent 桌面客户端，支持自动部署、模型同步、微信连接器、Windows 桥接、文件上传与 GitHub 自动更新。",
   "author": "",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "build:electron": "tsc -p tsconfig.main.json",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "test": "vitest run",
-    "package:win": "npm run build && electron-builder --win nsis",
+    "package:win": "node scripts/extract-release-notes.js && npm run build && electron-builder --win nsis",
     "package:mac": "npm run build && electron-builder --mac dmg zip",
     "package:portable": "npm run build && electron-builder --win portable --config.artifactName=Hermes-Forge-${version}-${arch}-portable.${ext}"
   },

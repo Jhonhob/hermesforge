@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KanbanPanel } from "./KanbanPanel";
 
@@ -51,7 +51,8 @@ describe("KanbanPanel", () => {
     expect(screen.getByText("Todo task")).toBeInTheDocument();
     expect(screen.getByText("调度器未启动")).toBeInTheDocument();
 
-    await waitFor(() => expect(screen.getByText(/需要关注/)).toBeInTheDocument());
+    // Diagnostics shown as stat pill and inline badge
+    await waitFor(() => expect(screen.getAllByText("告警").length).toBeGreaterThan(0));
     expect(screen.getAllByText("Blocked task").length).toBeGreaterThan(0);
   });
 
@@ -59,7 +60,7 @@ describe("KanbanPanel", () => {
     render(<KanbanPanel />);
 
     await screen.findByText("Forge Board");
-    fireEvent.click(screen.getByLabelText("显示归档"));
+    fireEvent.click(screen.getByTitle("显示已归档任务"));
 
     await waitFor(() =>
       expect(window.workbenchClient.listKanbanTasks).toHaveBeenLastCalledWith({ board: "forge", archived: true }),
@@ -70,9 +71,10 @@ describe("KanbanPanel", () => {
     render(<KanbanPanel />);
 
     await screen.findByText("Forge Board");
-    const statusSelect = screen.getByTitle("任务初始状态");
-    const options = within(statusSelect).getAllByRole("option").map((option) => option.textContent);
-
+    // Open the create-task form
+    fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: "任务状态" }));
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual(["待分类", "待处理"]);
   });
 
@@ -83,8 +85,12 @@ describe("KanbanPanel", () => {
     render(<KanbanPanel />);
 
     await waitFor(() => expect(window.workbenchClient.listKanbanTasks).toHaveBeenCalledWith({ archived: false }));
+    // Open the create-task form
+    fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
     fireEvent.change(screen.getByPlaceholderText("任务标题（必填）"), { target: { value: "Default board task" } });
-    fireEvent.click(screen.getByRole("button", { name: /添加任务/ }));
+    const submitBtns = screen.getAllByRole("button", { name: /新建/ });
+    const submitBtn = submitBtns.find((b) => b.textContent?.trim() === "新建") ?? submitBtns[submitBtns.length - 1];
+    fireEvent.click(submitBtn);
 
     await waitFor(() =>
       expect(window.workbenchClient.createKanbanTask).toHaveBeenCalledWith(expect.objectContaining({
@@ -99,7 +105,12 @@ describe("KanbanPanel", () => {
     render(<KanbanPanel />);
 
     await screen.findByText("Forge Board");
-    fireEvent.click(screen.getByRole("button", { name: /添加任务/ }));
+    // Open the create-task form
+    fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
+    // Click the form submit button (not the toolbar "新建任务" button)
+    const submitBtns = screen.getAllByRole("button", { name: /新建/ });
+    const submitBtn = submitBtns.find((b) => b.textContent?.trim() === "新建") ?? submitBtns[submitBtns.length - 1];
+    fireEvent.click(submitBtn);
 
     expect(screen.getByText("请先填写任务标题。")).toBeInTheDocument();
     expect(window.workbenchClient.createKanbanTask).not.toHaveBeenCalled();
@@ -121,14 +132,18 @@ describe("KanbanPanel", () => {
   });
 
   it("falls back to an existing board after deleting the active board", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(window.workbenchClient.listKanbanBoards)
       .mockResolvedValueOnce([{ slug: "forge", name: "Forge Board", is_current: true, counts: { todo: 1 } }])
       .mockResolvedValueOnce([{ slug: "default", name: "Default", is_current: true, counts: { todo: 0 } }]);
 
     render(<KanbanPanel />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    // Open the "更多操作" dropdown menu
+    fireEvent.click(await screen.findByTitle("更多操作"));
+    // Click "删除看板" menu item
+    fireEvent.click(await screen.findByText("删除看板"));
+    // ConfirmCard appears — click the confirm button
+    fireEvent.click(await screen.findByRole("button", { name: "确认" }));
 
     await waitFor(() => expect(window.workbenchClient.deleteKanbanBoard).toHaveBeenCalledWith("forge"));
     await waitFor(() =>

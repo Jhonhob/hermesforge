@@ -38,7 +38,7 @@ export class ShutdownPipeline {
         }))
         .catch((error) => ({
           ok: false,
-          message: error instanceof Error ? error.message : String(error),
+          message: "运行时诊断关闭超时。",
           error: error instanceof Error ? error.stack ?? error.message : String(error),
           timedOut: error instanceof ShutdownTimeoutError,
         }));

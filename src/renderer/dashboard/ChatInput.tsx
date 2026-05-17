@@ -598,7 +598,7 @@ export function ChatInput(props: {
         ) : null}
         <div
           className={cn(
-            "hermes-composer-card relative overflow-visible rounded-[28px] border border-white/80 bg-white/85 shadow-[0_10px_34px_rgba(15,23,42,0.045)] ring-1 ring-slate-900/[0.03] backdrop-blur-xl focus-within:hermes-purple-focus",
+            "hermes-composer-card relative overflow-visible rounded-[28px] border border-white/80 bg-white shadow-[0_10px_34px_rgba(15,23,42,0.045)] ring-1 ring-slate-900/[0.03] focus-within:hermes-purple-focus",
             isDraggingAttachment && "ring-2 ring-[var(--hermes-primary-border)]",
           )}
           onDragEnter={handleAttachmentDragEnter}
@@ -648,7 +648,7 @@ export function ChatInput(props: {
               }
             }}
             className="max-h-[24vh] min-h-[46px] w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400"
-            placeholder="写给 Hermes…"
+            placeholder="写给 Hermes… (/ 命令，拖拽或粘贴附件)"
           />
 
           <div className="flex items-center justify-between gap-2.5 px-3.5 pb-2.5 pt-0">
@@ -945,7 +945,7 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
     ? createPortal(
         <div
           ref={panelRef}
-          className="fixed z-[60] max-h-[min(320px,calc(100vh-96px))] overflow-auto rounded-[20px] border border-white/80 bg-white/90 p-3 text-[12px] text-slate-600 shadow-[0_24px_70px_rgba(15,23,42,0.16)] backdrop-blur-2xl ring-1 ring-slate-900/5"
+          className="fixed z-[60] max-h-[min(320px,calc(100vh-96px))] overflow-auto rounded-[20px] border border-white/80 bg-white p-3 text-[12px] text-slate-600 shadow-[0_24px_70px_rgba(15,23,42,0.16)] ring-1 ring-slate-900/5"
           style={{ right: panelPosition.right, bottom: panelPosition.bottom, width: panelPosition.width }}
         >
           <div className="flex items-center justify-between gap-3">
@@ -986,7 +986,7 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
       <button
         ref={buttonRef}
         className={cn(
-          "group inline-flex h-8 max-w-[144px] items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] font-medium shadow-[0_8px_20px_rgba(15,23,42,0.045)] backdrop-blur-xl transition duration-200 hover:-translate-y-0.5 hover:bg-white/90 hover:shadow-[0_12px_28px_rgba(15,23,42,0.075)] active:translate-y-0 max-sm:max-w-[108px]",
+          "group inline-flex h-8 max-w-[144px] items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] font-medium shadow-[0_8px_20px_rgba(15,23,42,0.045)] transition duration-200 hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_28px_rgba(15,23,42,0.075)] active:translate-y-0 max-sm:max-w-[108px]",
           meterClass,
         )}
         title={title}

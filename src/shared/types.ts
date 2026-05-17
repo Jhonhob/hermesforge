@@ -656,6 +656,8 @@ export type HermesGatewayStatus = {
   running: boolean;
   managedRunning: boolean;
   healthStatus: "running" | "stopped" | "error";
+  platformStates?: Record<string, string>;
+  connectedPlatforms?: string[];
   autoStartState?: "idle" | "starting" | "running" | "failed";
   autoStartMessage?: string;
   lastExitCode?: number | null;
@@ -947,6 +949,7 @@ export type ClientUpdateStatus =
   | "not-available"
   | "downloading"
   | "downloaded"
+  | "skipped"
   | "error";
 
 export type ClientUpdateEvent = {
@@ -954,11 +957,14 @@ export type ClientUpdateEvent = {
   message: string;
   currentVersion?: string;
   latestVersion?: string;
+  releaseNotes?: string;
   percent?: number;
   bytesPerSecond?: number;
   transferred?: number;
   total?: number;
   manual?: boolean;
+  /** 原始错误详情，供诊断使用 */
+  detail?: string;
   at: string;
 };
 
@@ -1152,6 +1158,7 @@ export type EngineEvent =
   | { type: "lifecycle"; stage: TaskLifecycleStage; message: string; at: string }
   | { type: "message_chunk"; content: string; at: string }
   | { type: "reasoning"; content: string; at: string }
+  | { type: "clarify"; question: string; choices?: string[]; at: string }
   | { type: "session_update"; hermesSessionId: string; previousHermesSessionId?: string; title?: string; messageCount?: number; model?: string; at: string }
   | { type: "progress"; step: string; done: boolean; message: string; at: string }
   | { type: "diagnostic"; category: string; message: string; provider?: string; model?: string; authMode?: string; durationMs?: number; at: string }

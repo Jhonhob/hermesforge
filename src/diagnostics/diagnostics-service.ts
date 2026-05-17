@@ -97,7 +97,7 @@ export class DiagnosticsService {
     await fs.writeFile(path.join(dir, "diagnostics.json"), JSON.stringify(report, null, 2), "utf8");
     await fs.writeFile(path.join(dir, "README.txt"), [
       "诊断报告已脱敏，不包含 API Key 明文。",
-      diagnosticErrors.length ? `部分诊断项读取失败，详见 diagnostics.json 的 diagnosticErrors 字段。失败项：${diagnosticErrors.map((item) => item.section).join(", ")}` : "所有诊断项已尽量读取完成。",
+      diagnosticErrors.length ? `部分诊断项读取失败，已记入技术报告。` : "所有诊断项已尽量读取完成。",
       "",
     ].join("\n"), "utf8");
     return {
