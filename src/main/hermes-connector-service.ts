@@ -89,7 +89,7 @@ const MANAGED_END = "# <<< Hermes Desktop Connectors <<<";
 
 const PYTHON_ENV = {
   PYTHONUTF8: "1",
-  PYTHONIOENCODING: "utf-8",
+  PYTHONIOENCODING: "utf-8:replace",
 };
 
 const PLATFORM_REGISTRY: HermesConnectorPlatform[] = [
@@ -472,6 +472,13 @@ export class HermesConnectorService {
     }
     if (options.forceReplace) {
       this.gatewayBackoffUntil = undefined;
+      if (this.gatewayProcess?.pid) {
+        this.gatewayUserStopped = true;
+        await killProcessTree(this.gatewayProcess.pid).catch((error) => {
+          console.warn("[Hermes Forge] Failed to stop existing managed Gateway before replace:", error);
+        });
+        this.gatewayUserStopped = false;
+      }
     }
     if (this.gatewayBackoffUntil && Date.parse(this.gatewayBackoffUntil) > Date.now()) {
       return {
@@ -560,24 +567,7 @@ export class HermesConnectorService {
       this.gatewayError = trimLog(`${this.gatewayError}\n${error.message}`);
     });
     child.on("close", (exitCode) => {
-      const wasRunning = this.gatewayAutoStartState === "running" || this.gatewayAutoStartState === "starting";
-      this.gatewayLastExitCode = exitCode;
-      this.gatewayLastExitAt = new Date().toISOString();
-      this.gatewayExitMessage = `Gateway 已退出，退出码：${exitCode ?? "unknown"}`;
-      if ((exitCode ?? 0) !== 0) {
-        this.gatewayRestartCount += 1;
-        this.gatewayBackoffUntil = new Date(Date.now() + 5_000).toISOString();
-        this.gatewayAutoStartState = "failed";
-        this.gatewayAutoStartMessage = this.gatewayError.trim() || this.gatewayExitMessage;
-      } else {
-        this.gatewayAutoStartState = "idle";
-        this.gatewayAutoStartMessage = "Gateway 已停止。";
-      }
-      this.gatewayProcess = undefined;
-      this.gatewayStartedAt = undefined;
-      if (wasRunning && !this.gatewayUserStopped && (exitCode ?? 0) !== 0) {
-        this.scheduleAutoRestart();
-      }
+      this.handleGatewayProcessClose(child, exitCode);
     });
     await this.sleep(1200);
     const status = await this.status();
@@ -613,6 +603,30 @@ export class HermesConnectorService {
     this.gatewayAutoStartState = "idle";
     this.gatewayAutoStartMessage = "Gateway 已停止。";
     return { ok: true, status: await this.status(), message: "Gateway 已停止。" };
+  }
+
+  private handleGatewayProcessClose(child: ChildProcessWithoutNullStreams, exitCode: number | null) {
+    if (this.gatewayProcess !== child) {
+      return;
+    }
+    const wasRunning = this.gatewayAutoStartState === "running" || this.gatewayAutoStartState === "starting";
+    this.gatewayLastExitCode = exitCode;
+    this.gatewayLastExitAt = new Date().toISOString();
+    this.gatewayExitMessage = `Gateway 已退出，退出码：${exitCode ?? "unknown"}`;
+    if ((exitCode ?? 0) !== 0) {
+      this.gatewayRestartCount += 1;
+      this.gatewayBackoffUntil = new Date(Date.now() + 5_000).toISOString();
+      this.gatewayAutoStartState = "failed";
+      this.gatewayAutoStartMessage = this.gatewayError.trim() || this.gatewayExitMessage;
+    } else {
+      this.gatewayAutoStartState = "idle";
+      this.gatewayAutoStartMessage = "Gateway 已停止。";
+    }
+    this.gatewayProcess = undefined;
+    this.gatewayStartedAt = undefined;
+    if (wasRunning && !this.gatewayUserStopped && (exitCode ?? 0) !== 0) {
+      this.scheduleAutoRestart();
+    }
   }
 
   async restart(): Promise<HermesGatewayActionResult> {
@@ -802,7 +816,7 @@ export class HermesConnectorService {
           rootPath: runtime.adapter.toRuntimePath(root),
           pythonArgs: [runtime.adapter.toRuntimePath(scriptPath)],
           cwd: root,
-          env: { ...process.env, ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}) },
+          env: buildPythonEnv(process.env, await this.isEditableInstall(root) ? [runtime.adapter.toRuntimePath(root)] : []),
         })
         : await this.legacyPythonLaunch(root, [scriptPath]);
     } catch (error) {
@@ -906,7 +920,7 @@ export class HermesConnectorService {
           rootPath: runtime.adapter.toRuntimePath(root),
           pythonArgs: ["-m", "pip", "install", "aiohttp"],
           cwd: root,
-          env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}) },
+          env: buildPythonEnv(undefined, await this.isEditableInstall(root) ? [runtime.adapter.toRuntimePath(root)] : []),
         })
         : await this.legacyPythonLaunch(root, ["-m", "pip", "install", "aiohttp"], python!.command, python!.args);
     } catch (error) {
@@ -1101,7 +1115,7 @@ export class HermesConnectorService {
       {
         cwd: root,
         timeoutMs: 10000,
-        env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
+        env: buildPythonEnv(undefined, await this.isEditableInstall(root) ? [root] : []),
         commandId: "connector.weixin.preflight-dependencies.legacy",
         runtimeKind: "windows",
       },
@@ -1442,7 +1456,7 @@ export class HermesConnectorService {
       rootPath: runtimeRoot,
       pythonArgs: [cliPath, "--version"],
       cwd: runtime.root,
-      env: { ...PYTHON_ENV, ...(await this.isEditableInstall(runtime.root) ? { PYTHONPATH: runtimeRoot } : {}), HERMES_HOME: runtimeHermesHome },
+      env: buildPythonEnv({ HERMES_HOME: runtimeHermesHome }, await this.isEditableInstall(runtime.root) ? [runtimeRoot] : []),
     });
     const result = await runCommand(launch.command, launch.args, {
       cwd: launch.cwd,
@@ -1503,7 +1517,7 @@ export class HermesConnectorService {
       command: python.command,
       args: [...python.args, ...pythonArgs],
       cwd: root,
-      env: { ...process.env, ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
+      env: buildPythonEnv(process.env, await this.isEditableInstall(root) ? [root] : []),
       label: `${python.label} legacy`,
     };
   }
@@ -1515,7 +1529,7 @@ export class HermesConnectorService {
       command: python.command,
       args: [...python.args, this.hermesCliPath(root), "gateway", "status"],
       cwd: root,
-      env: { ...PYTHON_ENV, HERMES_HOME: await this.activeHermesHome() },
+      env: buildPythonEnv({ HERMES_HOME: await this.activeHermesHome() }),
     };
   }
 
@@ -1536,7 +1550,7 @@ export class HermesConnectorService {
       rootPath: runtimeRoot,
       pythonArgs: ["-c", script],
       cwd: root,
-      env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtimeRoot } : {}) },
+      env: buildPythonEnv(undefined, await this.isEditableInstall(root) ? [runtimeRoot] : []),
     });
     const result = await runCommand(launch.command, launch.args, {
       cwd: launch.cwd,
@@ -1609,7 +1623,7 @@ export class HermesConnectorService {
       const result = await runCommand(candidate.command, [...candidate.args, this.hermesCliPath(root), "--version"], {
         cwd: root,
         timeoutMs: 5000,
-        env: { ...PYTHON_ENV, ...(await this.isEditableInstall(root) ? { PYTHONPATH: root } : {}) },
+        env: buildPythonEnv(undefined, await this.isEditableInstall(root) ? [root] : []),
       });
       if (result.exitCode === 0 && /Hermes Agent/i.test(`${result.stdout}\n${result.stderr}`)) {
         return candidate;
@@ -1671,11 +1685,10 @@ export class HermesConnectorService {
         rootPath: runtime.adapter.toRuntimePath(root),
         pythonArgs: [runtime.runtime.mode === "wsl" ? `${runtime.adapter.toRuntimePath(root).replace(/\/+$/, "")}/hermes` : this.hermesCliPath(root), "gateway", "status"],
         cwd: root,
-        env: {
-          ...PYTHON_ENV,
-          ...(await this.isEditableInstall(root) ? { PYTHONPATH: runtime.adapter.toRuntimePath(root) } : {}),
-          HERMES_HOME: runtime.adapter.toRuntimePath(await this.activeHermesHome()),
-        },
+        env: buildPythonEnv(
+          { HERMES_HOME: runtime.adapter.toRuntimePath(await this.activeHermesHome()) },
+          await this.isEditableInstall(root) ? [runtime.adapter.toRuntimePath(root)] : [],
+        ),
       })
       : await this.gatewayStatusFallback(root, runtime.message);
     const result = await runCommand(launch.command, launch.args, {
@@ -1876,18 +1889,59 @@ function unquoteEnv(value: string) {
   return value;
 }
 
-function buildGatewayEnv(baseEnv: NodeJS.ProcessEnv, hermesEnv: Record<string, string>, runtimeRoot?: string, hermesHome?: string, editable?: boolean): NodeJS.ProcessEnv {
-  const pythonPath = [runtimeRoot, baseEnv.PYTHONPATH].filter((value): value is string => Boolean(value?.trim())).join(path.delimiter);
+function buildPythonEnv(baseEnv?: NodeJS.ProcessEnv, pythonPathEntries: string[] = []): NodeJS.ProcessEnv {
+  const mergedBase = baseEnv ?? {};
+  const pythonPath = joinPythonPath([
+    pythonSiteCustomizePath(),
+    ...pythonPathEntries,
+    mergedBase.PYTHONPATH,
+  ]);
   return {
-    ...baseEnv,
-    ...hermesEnv,
+    ...mergedBase,
+    ...PYTHON_ENV,
+    ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+  };
+}
+
+function buildGatewayEnv(baseEnv: NodeJS.ProcessEnv, hermesEnv: Record<string, string>, runtimeRoot?: string, hermesHome?: string, editable?: boolean): NodeJS.ProcessEnv {
+  const mergedBase = { ...baseEnv, ...hermesEnv };
+  const pythonPath = joinPythonPath([
+    pythonSiteCustomizePath(),
+    editable ? runtimeRoot : undefined,
+    mergedBase.PYTHONPATH,
+  ]);
+  return {
+    ...mergedBase,
     ...PYTHON_ENV,
     PYTHONUNBUFFERED: "1",
     NO_COLOR: "1",
     FORCE_COLOR: "0",
-    ...(editable && pythonPath ? { PYTHONPATH: pythonPath } : {}),
+    ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
     ...(hermesHome ? { HERMES_HOME: hermesHome } : {}),
   };
+}
+
+function joinPythonPath(entries: Array<string | undefined>) {
+  const seen = new Set<string>();
+  const clean = entries
+    .flatMap((entry) => (entry ?? "").split(path.delimiter))
+    .map((entry) => entry.trim())
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) return false;
+      seen.add(entry);
+      return true;
+    });
+  return clean.join(path.delimiter);
+}
+
+function pythonSiteCustomizePath() {
+  if (process.platform !== "win32") return undefined;
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  const candidates = [
+    path.join(process.cwd(), "resources", "python-sitecustomize"),
+    resourcesPath ? path.join(resourcesPath, "python-sitecustomize") : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  return candidates.find((candidate) => fsSync.existsSync(candidate)) ?? candidates[0];
 }
 
 function gatewayWarningOutput(text: string) {
@@ -2022,12 +2076,63 @@ function classifyWeixinInstallFailure(output: string) {
 
 function looksLikeGatewayRunning(stdout?: string, stderr?: string) {
   const text = `${stdout ?? ""}\n${stderr ?? ""}`;
-  return /gateway is running|gateway.+running/i.test(text) && !/not running/i.test(text);
+  const structured = parseGatewayRunningHint(text);
+  if (structured !== undefined) return structured;
+  return /gateway is running|gateway.+running/i.test(text) && !/not running|running\s*[:=]\s*false/i.test(text);
 }
 
 function looksLikeGatewayFailure(stdout?: string, stderr?: string) {
   const text = `${stdout ?? ""}\n${stderr ?? ""}`;
   return /traceback|module not found|error:|exception/i.test(text);
+}
+
+function parseGatewayRunningHint(text: string): boolean | undefined {
+  for (const candidate of jsonObjectCandidates(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const hint = gatewayRunningHintFromObject(parsed);
+    if (hint !== undefined) return hint;
+  }
+  const runningMatch = /(?:^|[\s,{])"?running"?\s*[:=]\s*(true|false)\b/i.exec(text);
+  if (runningMatch) return runningMatch[1].toLowerCase() === "true";
+  const stateMatch = /(?:gateway_)?state"?\s*[:=]\s*"?([a-z_ -]+)"?/i.exec(text);
+  if (stateMatch) {
+    const state = stateMatch[1].trim().toLowerCase();
+    if (["running", "started", "active"].includes(state)) return true;
+    if (["stopped", "not_running", "not running", "offline", "error", "failed"].includes(state)) return false;
+  }
+  return undefined;
+}
+
+function jsonObjectCandidates(text: string) {
+  const candidates: string[] = [];
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) candidates.push(trimmed);
+  for (const line of text.split(/\r?\n/)) {
+    const value = line.trim();
+    if (value.startsWith("{") && value.endsWith("}")) candidates.push(value);
+  }
+  return [...new Set(candidates)];
+}
+
+function gatewayRunningHintFromObject(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.running === "boolean") return record.running;
+  const state = typeof record.gateway_state === "string"
+    ? record.gateway_state
+    : typeof record.state === "string"
+      ? record.state
+      : undefined;
+  if (!state) return undefined;
+  const normalized = state.trim().toLowerCase();
+  if (["running", "started", "active"].includes(normalized)) return true;
+  if (["stopped", "not_running", "not running", "offline", "error", "failed"].includes(normalized)) return false;
+  return undefined;
 }
 
 function trimLog(value: string) {
@@ -2207,6 +2312,7 @@ export const testOnly = {
   parseWeixinQrEvent,
   buildGatewayEnv,
   splitGatewayStderr,
+  looksLikeGatewayRunning,
   removeManagedBlock,
   sanitizeEnvBackup,
 };

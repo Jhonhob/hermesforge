@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   ActivityLog,
-  ConversationHistoryEntry,
   EngineEvent,
   HermesInstallEvent,
   HermesPermissionPolicyMode,
@@ -27,14 +26,17 @@ import type {
 } from "../shared/types";
 import { DashboardView } from "./dashboard/DashboardView";
 import { SupportView } from "./dashboard/SupportView";
-import { WelcomePage } from "./dashboard/WelcomePage";
+import { WelcomePage, type WelcomeCompleteTarget } from "./dashboard/WelcomePage";
 import { ToastContainer } from "./dashboard/ToastNotification";
 import { PageLoader } from "./dashboard/LoadingIndicator";
 import { ModelConfigWizard } from "./dashboard/components/panels/ModelConfigWizard";
 import { SettingsPanel as HermesSettingsPanel } from "./dashboard/components/panels/SettingsPanel";
+import { InstallSourceDialog, type InstallSourceChoice } from "./dashboard/components/InstallSourceDialog";
 import { ConfigCenterLayout, type ConfigSectionId } from "./dashboard/components/settings/ConfigCenterLayout";
 import { ToggleSwitch } from "./dashboard/components/settings/ToggleSwitch";
+import { buildConversationHistory } from "./conversationHistory";
 import { usePermissionOverview } from "./hooks/usePermissionOverview";
+import { markPerf, markPerfEnd, markPerfStart } from "./perf";
 import { targetSessionForTaskEvent } from "./session-routing";
 import { useAppStore, type RecentWorkspace } from "./store";
 import { safePromiseWithFallback } from "./utils/safePromise";
@@ -94,25 +96,6 @@ function defaultHermesRuntime(): HermesRuntimeConfig {
   };
 }
 
-function hermesInstallOptions(rootPath: string, runtime: HermesRuntimeConfig) {
-  const source = runtime.installSource;
-  const kind = source?.sourceLabel === "mirror"
-    ? "mirror"
-    : source?.sourceLabel === "custom" || source?.sourceLabel === "fork"
-      ? "custom"
-      : "official";
-  const options: Parameters<Window["workbenchClient"]["installHermes"]>[0] = {
-    ...(rootPath.trim() ? { rootPath: rootPath.trim() } : {}),
-    source: {
-      kind,
-      repoUrl: source?.repoUrl,
-      branch: source?.branch,
-      commit: source?.commit,
-    },
-  };
-  return options;
-}
-
 function SettingsView(props: {
   overview?: ConfigOverview;
   initialSection?: ConfigSectionId;
@@ -143,6 +126,8 @@ function SettingsView(props: {
   const [repairingDependency, setRepairingDependency] = useState<SetupDependencyRepairId | undefined>();
   const [setupActionRunning, setSetupActionRunning] = useState<string | undefined>();
   const [installEvent, setInstallEvent] = useState<HermesInstallEvent | undefined>();
+  const [installSourceDialogOpen, setInstallSourceDialogOpen] = useState(false);
+  const [pendingInstallActionId, setPendingInstallActionId] = useState<string | undefined>();
   const [testingBridge, setTestingBridge] = useState(false);
   const [bridgeTest, setBridgeTest] = useState<HermesWindowsBridgeTestResult | undefined>();
   const [oneClickDiagnosticsRunning, setOneClickDiagnosticsRunning] = useState(false);
@@ -250,12 +235,19 @@ function SettingsView(props: {
     }
   }
 
-  async function installHermesToCurrentPath() {
+  async function installHermesFromSettings(kind: InstallSourceChoice) {
     if (setupActionRunning) return;
-    setSetupActionRunning("hermes");
+    const actionId = pendingInstallActionId ?? "hermes";
+    setInstallSourceDialogOpen(false);
+    setSetupActionRunning(actionId);
     setInstallEvent(undefined);
     try {
-      const result = await window.workbenchClient.installHermes(hermesInstallOptions(rootPath, runtime));
+      const saved = await window.workbenchClient.updateHermesConfig({ rootPath, runtime });
+      store.setRuntimeConfig(saved);
+      const result = await window.workbenchClient.installHermes({
+        ...(rootPath.trim() ? { rootPath: rootPath.trim() } : {}),
+        source: { kind },
+      });
       if (result.rootPath) setRootPath(result.rootPath);
       await props.onRefresh();
       showSaveNotice(result.message);
@@ -264,6 +256,7 @@ function SettingsView(props: {
       await refreshAfterMaintenanceAttempt();
     } finally {
       setSetupActionRunning(undefined);
+      setPendingInstallActionId(undefined);
     }
   }
 
@@ -351,19 +344,8 @@ function SettingsView(props: {
     }
 
     if (check.fixAction === "install_hermes") {
-      setSetupActionRunning(check.id);
-      setInstallEvent(undefined);
-      try {
-        const result = await window.workbenchClient.installHermes(hermesInstallOptions(rootPath, runtime));
-        if (result.rootPath) setRootPath(result.rootPath);
-        await props.onRefresh();
-        showSaveNotice(result.message);
-      } catch (error) {
-        showSaveNotice(error instanceof Error ? error.message : "Hermes 自动安装失败");
-        await refreshAfterMaintenanceAttempt();
-      } finally {
-        setSetupActionRunning(undefined);
-      }
+      setPendingInstallActionId(check.id);
+      setInstallSourceDialogOpen(true);
       return;
     }
 
@@ -434,6 +416,15 @@ function SettingsView(props: {
       title="设置中心"
       description="这里只放最关键、最常用，而且能直接影响是否能正常工作的设置。"
     >
+      <InstallSourceDialog
+        busy={Boolean(setupActionRunning)}
+        onClose={() => {
+          setInstallSourceDialogOpen(false);
+          setPendingInstallActionId(undefined);
+        }}
+        onSelect={(kind) => void installHermesFromSettings(kind)}
+        open={installSourceDialogOpen}
+      />
       {activeSection === "general" ? (
         <HermesSettingsPanel
           onRefresh={props.onRefresh}
@@ -863,20 +854,34 @@ function App() {
   const [configOverview, setConfigOverview] = useState<ConfigOverview | undefined>();
   const [settingsInitialSection, setSettingsInitialSection] = useState<ConfigSectionId>("general");
   const sessionLoadSeq = useRef(0);
+  const coalescedRefreshes = useRef(new Map<string, Promise<unknown>>());
+  const taskPerf = useRef(new Map<string, { startedAt: number; firstTokenAt?: number }>());
   const store = useAppStore();
 
   async function loadConfigOverview(workspacePath?: string) {
-    const overview = await safePromiseWithFallback(
-      window.workbenchClient.getConfigOverview(workspacePath),
-      undefined,
-      { errorMessage: "加载配置概览失败" }
-    );
-    setConfigOverview(overview);
-    if (overview?.runtimeConfig) {
-      store.setRuntimeConfig(overview.runtimeConfig);
-    }
-    void window.workbenchClient.getPermissionOverview?.().then((permissionOverview) => store.setPermissionOverview(permissionOverview)).catch(() => undefined);
-    return overview;
+    return coalesceRefresh(`config:${workspacePath ?? ""}`, async () => {
+      const overview = await safePromiseWithFallback(
+        window.workbenchClient.getConfigOverview(workspacePath),
+        undefined,
+        { errorMessage: "加载配置概览失败" }
+      );
+      setConfigOverview(overview);
+      if (overview?.runtimeConfig) {
+        store.setRuntimeConfig(overview.runtimeConfig);
+      }
+      void window.workbenchClient.getPermissionOverview?.().then((permissionOverview) => store.setPermissionOverview(permissionOverview)).catch(() => undefined);
+      return overview;
+    });
+  }
+
+  async function coalesceRefresh<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const existing = coalescedRefreshes.current.get(key);
+    if (existing) return existing as Promise<T>;
+    const promise = task().finally(() => {
+      coalescedRefreshes.current.delete(key);
+    });
+    coalescedRefreshes.current.set(key, promise);
+    return promise;
   }
 
   async function loadWebUiOverview() {
@@ -920,6 +925,15 @@ function App() {
 
     function releaseTaskLockForTerminalEvent(event: TaskEventEnvelope) {
       if (!isTerminalTaskEvent(event)) return;
+      const perfEntry = taskPerf.current.get(event.taskRunId);
+      if (perfEntry) {
+        markPerf("task:complete", {
+          taskRunId: event.taskRunId,
+          durationMs: Math.round(performance.now() - perfEntry.startedAt),
+          firstTokenMs: perfEntry.firstTokenAt ? Math.round(perfEntry.firstTokenAt - perfEntry.startedAt) : undefined,
+        });
+        taskPerf.current.delete(event.taskRunId);
+      }
       const currentState = useAppStore.getState();
       if (currentState.runningSessionId === event.taskRunId) {
         store.setRunningSessionId(undefined);
@@ -980,6 +994,16 @@ function App() {
     }
 
     const unsubscribe = window.workbenchClient.onTaskEvent((event) => {
+      if (event.event.type === "message_chunk") {
+        const perfEntry = taskPerf.current.get(event.taskRunId);
+        if (perfEntry && !perfEntry.firstTokenAt) {
+          perfEntry.firstTokenAt = performance.now();
+          markPerf("task:first-token", {
+            taskRunId: event.taskRunId,
+            firstTokenMs: Math.round(perfEntry.firstTokenAt - perfEntry.startedAt),
+          });
+        }
+      }
       const isTerminal = event.event.type === "result" || event.event.type === "lifecycle";
       if (isTerminal) {
         if (rafId !== null) {
@@ -1049,6 +1073,7 @@ function App() {
   }, []);
 
   async function bootstrap() {
+    markPerfStart("bootstrap");
     store.startLoading("bootstrap");
     try {
       // 强制设置默认状态，确保启动时显示聊天界面
@@ -1137,10 +1162,15 @@ function App() {
       
     } finally {
       store.stopLoading("bootstrap");
+      markPerfEnd("bootstrap", {
+        sessions: useAppStore.getState().sessions.length,
+        activeSessionId: useAppStore.getState().activeSessionId,
+      });
     }
   }
 
   async function selectSession(sessionOrId: WorkSession | string) {
+    markPerfStart("session:switch");
     const current = useAppStore.getState();
     let session = typeof sessionOrId === "string"
       ? current.sessions.find((item) => item.id === sessionOrId)
@@ -1163,6 +1193,7 @@ function App() {
     store.setSessionAgentInsight(undefined);
     const requestId = ++sessionLoadSeq.current;
     await loadSelectedSessionData(session, requestId);
+    markPerfEnd("session:switch", { sessionId: session.id });
 
     // 非关键数据：后台异步加载
     Promise.all([
@@ -1388,10 +1419,15 @@ function App() {
 
     const taskType = current.workspacePath.trim() ? inferTaskType(prompt, current.taskType) : "custom";
     const workSessionId = activeSessionId || "local-session";
-    const conversationHistory = buildConversationHistory(current, workSessionId);
+    const conversationHistory = buildConversationHistory({
+      workSessionId,
+      taskRunOrderBySession: current.taskRunOrderBySession,
+      taskRunProjectionsById: current.taskRunProjectionsById,
+    });
     const clientTaskId = createClientTaskId();
     const createdAt = new Date().toISOString();
     store.beginTaskRun({ workSessionId, taskRunId: clientTaskId, userInput: prompt, createdAt });
+    taskPerf.current.set(clientTaskId, { startedAt: performance.now() });
     store.setUserInput("");
     let result;
     try {
@@ -1408,6 +1444,7 @@ function App() {
         modelProfileId: current.runtimeConfig?.defaultModelProfileId,
       });
     } catch (error) {
+      taskPerf.current.delete(clientTaskId);
       const message = error instanceof Error ? error.message : "Hermes 启动前检查失败。";
       store.finalizeTaskRun(clientTaskId, { status: "failed", content: humanizeStartFailure(message) });
       const latest = useAppStore.getState();
@@ -1432,7 +1469,14 @@ function App() {
       return;
     }
     store.clearAttachments();
-    if (result.taskRunId !== clientTaskId) store.rebindTaskRunId(clientTaskId, result.taskRunId);
+    if (result.taskRunId !== clientTaskId) {
+      const perfEntry = taskPerf.current.get(clientTaskId);
+      if (perfEntry) {
+        taskPerf.current.delete(clientTaskId);
+        taskPerf.current.set(result.taskRunId, perfEntry);
+      }
+      store.rebindTaskRunId(clientTaskId, result.taskRunId);
+    }
     const resultProjection = useAppStore.getState().taskRunProjectionsById[result.taskRunId];
     if (!isTerminalTaskStatus(resultProjection?.status)) {
       store.setRunningSessionId(result.taskRunId);
@@ -1483,7 +1527,12 @@ function App() {
       });
       store.upsertSession(updated);
     }
-    await Promise.all([refreshWorkspaceSafety(), refreshSetupSummary(), refreshHermesStatus(), loadConfigOverview(current.workspacePath || undefined)]);
+    void Promise.all([
+      refreshWorkspaceSafety(),
+      refreshSetupSummary(),
+      refreshHermesStatus(),
+      loadConfigOverview(current.workspacePath || undefined),
+    ]).catch(() => undefined);
   }
 
   async function cancelTask() {
@@ -1556,33 +1605,37 @@ function App() {
   }
 
   async function refreshHermesStatus() {
-    const current = useAppStore.getState();
-    const [status, probe] = await Promise.all([
-      safePromiseWithFallback(
-        window.workbenchClient.getHermesStatus(current.workspacePath || undefined),
-        undefined,
-        { errorMessage: "获取 Hermes 状态失败" }
-      ),
-      safePromiseWithFallback(
-        window.workbenchClient.getHermesProbe(current.workspacePath || undefined),
-        undefined,
-        { errorMessage: "获取 Hermes 探测失败" }
-      ),
-    ]);
-    if (status) store.setHermesStatus(status);
-    if (probe) store.setHermesProbe(probe);
+    const workspacePath = useAppStore.getState().workspacePath || undefined;
+    await coalesceRefresh(`hermes-status:${workspacePath ?? ""}`, async () => {
+      const [status, probe] = await Promise.all([
+        safePromiseWithFallback(
+          window.workbenchClient.getHermesStatus(workspacePath),
+          undefined,
+          { errorMessage: "获取 Hermes 状态失败" }
+        ),
+        safePromiseWithFallback(
+          window.workbenchClient.getHermesProbe(workspacePath),
+          undefined,
+          { errorMessage: "获取 Hermes 探测失败" }
+        ),
+      ]);
+      if (status) store.setHermesStatus(status);
+      if (probe) store.setHermesProbe(probe);
+    });
   }
 
   async function refreshSetupSummary() {
-    const current = useAppStore.getState();
-    const summary = await safePromiseWithFallback(
-      window.workbenchClient.getSetupSummary(current.workspacePath || undefined),
-      undefined,
-      { errorMessage: "获取设置摘要失败" }
-    );
-    if (summary) {
-      store.setSetupSummary(summary);
-    }
+    const workspacePath = useAppStore.getState().workspacePath || undefined;
+    await coalesceRefresh(`setup-summary:${workspacePath ?? ""}`, async () => {
+      const summary = await safePromiseWithFallback(
+        window.workbenchClient.getSetupSummary(workspacePath),
+        undefined,
+        { errorMessage: "获取设置摘要失败" }
+      );
+      if (summary) {
+        store.setSetupSummary(summary);
+      }
+    });
   }
 
   function openFixTarget(target: FixTarget) {
@@ -1597,8 +1650,16 @@ function App() {
     store.setView("settings");
   }
 
+  function completeWelcome(target?: WelcomeCompleteTarget) {
+    store.setFirstLaunch(false);
+    if (target === "model") {
+      setSettingsInitialSection("providers");
+      store.setView("settings");
+    }
+  }
+
   if (store.firstLaunch) {
-    return <WelcomePage onComplete={() => store.setFirstLaunch(false)} />;
+    return <WelcomePage onComplete={completeWelcome} />;
   }
 
   return (
@@ -1712,35 +1773,6 @@ function promptNeedsWorkspace(input: string, selectedFiles: string[]) {
     /读取|读一下|查看|分析|检查|搜索|打开|遍历|修复|修改|编辑|重构|定位|查找/.test(text) &&
     /文件|代码|项目|目录|仓库|源码|模块|package\.json|readme|tsconfig|src\b|文件夹|工作区/.test(text)
   );
-}
-
-function buildConversationHistory(state: ReturnType<typeof useAppStore.getState>, workSessionId: string): ConversationHistoryEntry[] {
-  const order = state.taskRunOrderBySession[workSessionId] ?? [];
-  return order
-    .map((taskRunId) => state.taskRunProjectionsById[taskRunId])
-    .filter((run): run is NonNullable<typeof run> => Boolean(run) && run.workSessionId === workSessionId)
-    .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
-    .flatMap<ConversationHistoryEntry>((run) => {
-      const entries: ConversationHistoryEntry[] = [];
-      if (run.userMessage?.content.trim()) {
-        entries.push({
-          role: "user",
-          content: run.userMessage.content.trim(),
-          createdAt: run.userMessage.createdAt,
-          taskRunId: run.taskRunId,
-        });
-      }
-      if (run.assistantMessage.content.trim() && run.status === "complete") {
-        entries.push({
-          role: "assistant",
-          content: run.assistantMessage.content.trim(),
-          createdAt: run.assistantMessage.createdAt,
-          taskRunId: run.taskRunId,
-        });
-      }
-      return entries;
-    })
-    .slice(-24);
 }
 
 function humanizeStartFailure(message: string) {

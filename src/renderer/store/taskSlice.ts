@@ -160,8 +160,8 @@ function upsertToolEvent(
   return tools.map((tool, index) => (index === existingIndex ? { ...tool, ...next } : tool));
 }
 
-function appendAssistantContent(projection: TaskRunProjection, content: string, at: string, status: TaskRunStatus) {
-  const separator = projection.assistantMessage.content && content && !projection.assistantMessage.content.endsWith("\n") ? "\n" : "";
+function appendAssistantContent(projection: TaskRunProjection, content: string, at: string, status: TaskRunStatus, separatorMode: "exact" | "line" = "line") {
+  const separator = separatorMode === "line" && projection.assistantMessage.content && content && !projection.assistantMessage.content.endsWith("\n") ? "\n" : "";
   return {
     ...projection,
     status,
@@ -225,7 +225,13 @@ function applyEngineEventToProjection(projection: TaskRunProjection, envelope: T
     };
   }
   if (content !== undefined) {
-    return appendAssistantContent(base, content, event.at, event.type === "message_chunk" ? "streaming" : "running");
+    return appendAssistantContent(
+      base,
+      content,
+      event.at,
+      event.type === "message_chunk" ? "streaming" : "running",
+      event.type === "message_chunk" ? "exact" : "line",
+    );
   }
 
   if (event.type === "diagnostic" && base.status === "failed" && !base.assistantMessage.content) {
@@ -542,18 +548,57 @@ export const taskSlice = combine<TaskState, TaskActions>(
       }),
     rebuildSessionProjections: (workSessionId: string, events: TaskEventEnvelope[]) =>
       set((state) => {
-        const projections: Record<string, TaskRunProjection> = { ...state.taskRunProjectionsById };
+        const relevantEvents = events
+          .filter((event) => !event.workSessionId || event.workSessionId === workSessionId)
+          .sort((left, right) => {
+            const byTime = left.event.at.localeCompare(right.event.at);
+            return byTime || left.taskRunId.localeCompare(right.taskRunId);
+          });
+        const previousSessionIds = new Set([
+          ...(state.taskRunOrderBySession[workSessionId] ?? []),
+          ...Object.values(state.taskRunProjectionsById)
+            .filter((projection) => projection.workSessionId === workSessionId)
+            .map((projection) => projection.taskRunId),
+        ]);
+        const previousSessionProjections = new Map(
+          [...previousSessionIds]
+            .map((taskRunId) => [taskRunId, state.taskRunProjectionsById[taskRunId]] as const)
+            .filter((entry): entry is readonly [string, TaskRunProjection] => Boolean(entry[1])),
+        );
+        const projections: Record<string, TaskRunProjection> = Object.fromEntries(
+          Object.entries(state.taskRunProjectionsById).filter(([taskRunId, projection]) => (
+            projection.workSessionId !== workSessionId && !previousSessionIds.has(taskRunId)
+          )),
+        );
+        const taskEventsByRunId: Record<string, TaskEventEnvelope[]> = Object.fromEntries(
+          Object.entries(state.taskEventsByRunId).filter(([taskRunId]) => !previousSessionIds.has(taskRunId)),
+        );
         const order: string[] = [];
 
-        events.forEach((event) => {
+        relevantEvents.forEach((event) => {
           const base = ensureTaskProjection(projections[event.taskRunId], {
             taskRunId: event.taskRunId,
             workSessionId,
             createdAt: event.event.at,
           });
           projections[event.taskRunId] = applyEngineEventToProjection(base, { ...event, workSessionId });
+          const previous = previousSessionProjections.get(event.taskRunId);
+          if (previous?.userMessage && !projections[event.taskRunId].userMessage) {
+            projections[event.taskRunId] = {
+              ...projections[event.taskRunId],
+              userMessage: previous.userMessage,
+            };
+          }
+          taskEventsByRunId[event.taskRunId] = [...(taskEventsByRunId[event.taskRunId] ?? []), { ...event, workSessionId }].slice(-MAX_TASK_EVENTS_PER_RUN);
           if (!order.includes(event.taskRunId)) order.push(event.taskRunId);
         });
+
+        for (const [taskRunId, projection] of previousSessionProjections) {
+          if (projections[taskRunId]) continue;
+          if (!projection.userMessage && !projection.assistantMessage?.content) continue;
+          projections[taskRunId] = projection;
+          if (!order.includes(taskRunId)) order.push(taskRunId);
+        }
 
         for (const taskRunId of order) {
           const projection = projections[taskRunId];
@@ -571,7 +616,16 @@ export const taskSlice = combine<TaskState, TaskActions>(
 
         return {
           taskRunProjectionsById: projections,
-          taskRunOrderBySession: { ...state.taskRunOrderBySession, [workSessionId]: order },
+          taskEventsByRunId,
+          taskRunOrderBySession: {
+            ...state.taskRunOrderBySession,
+            [workSessionId]: order.sort((left, right) => {
+              const leftProjection = projections[left];
+              const rightProjection = projections[right];
+              const byTime = (leftProjection?.startedAt ?? "").localeCompare(rightProjection?.startedAt ?? "");
+              return byTime || left.localeCompare(right);
+            }),
+          },
         };
       }),
     clearSessionData: (sessionId: string) =>

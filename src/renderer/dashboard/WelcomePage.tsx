@@ -3,11 +3,13 @@ import type { ReactNode } from "react";
 import { Sparkles, CheckCircle2, AlertCircle, Loader2, ArrowRight, Settings, HelpCircle, Wrench, BookOpen, X, ExternalLink, Terminal, ChevronDown, ChevronUp, Globe } from "lucide-react";
 import { useAppStore } from "../store";
 import type { HermesInstallEvent, SetupCheck, SetupDependencyRepairId } from "../../shared/types";
+import { InstallSourceDialog, type InstallSourceChoice } from "./components/InstallSourceDialog";
 
 const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent";
 const OFFICIAL_HERMES_DOCS_URL = "https://hermes-agent.nousresearch.com/";
+export type WelcomeCompleteTarget = "workbench" | "model";
 
-export function WelcomePage(props: { onComplete: () => void }) {
+export function WelcomePage(props: { onComplete: (target?: WelcomeCompleteTarget) => void }) {
   const store = useAppStore();
   const [status, setStatus] = useState<"detecting" | "found" | "not-found" | "installing">("detecting");
   const [progress, setProgress] = useState(0);
@@ -20,8 +22,11 @@ export function WelcomePage(props: { onComplete: () => void }) {
   const [showLogs, setShowLogs] = useState(false);
   const [networkHint, setNetworkHint] = useState<string | null>(null);
   const [macRuntime, setMacRuntime] = useState(false);
+  const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
+  const [showMirrorRetry, setShowMirrorRetry] = useState(false);
   const autoInstallAttemptedRef = useRef(false);
   const installRunningRef = useRef(false);
+  const lastInstallSourceKindRef = useRef<InstallSourceChoice | undefined>(undefined);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,7 +44,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
       setDetail("macOS 暂不使用 Windows 自动安装脚本。请先安装 Hermes Agent，然后在设置中选择 Hermes 根目录。");
       return;
     }
-    void handleAutoDeploy();
+    openInstallSourceDialog();
   }
 
   useEffect(() => {
@@ -65,8 +70,8 @@ export function WelcomePage(props: { onComplete: () => void }) {
         }
 
         setStatus("not-found");
-        setMessage("未检测到可用 Hermes，正在准备下一步...");
-        setDetail(probe?.probe?.message ?? "将根据当前运行环境选择安装方式。");
+        setMessage("未检测到可用 Hermes，请选择安装来源。");
+        setDetail(probe?.probe?.message ?? "你可以优先使用官方 GitHub；如果 GitHub/uv/Python 下载较慢，可主动选择国内社区镜像。");
 
         if (!autoInstallAttemptedRef.current) {
           autoInstallAttemptedRef.current = true;
@@ -76,11 +81,11 @@ export function WelcomePage(props: { onComplete: () => void }) {
         console.error("Hermes detection failed:", error);
         setStatus("not-found");
         const manualMac = await shouldUseManualMacSetup();
-        setMessage(manualMac ? "检测失败，请手动选择 macOS Hermes 安装位置。" : "检测失败，正在尝试自动安装 Hermes...");
+        setMessage(manualMac ? "检测失败，请手动选择 macOS Hermes 安装位置。" : "检测失败，请选择 Hermes 安装来源。");
         setDetail(error instanceof Error ? error.message : "未知错误");
         if (!manualMac && !autoInstallAttemptedRef.current) {
           autoInstallAttemptedRef.current = true;
-          void handleAutoDeploy();
+          openInstallSourceDialog();
         }
       }
     }
@@ -91,11 +96,28 @@ export function WelcomePage(props: { onComplete: () => void }) {
   useEffect(() => {
     if (status !== "found") return;
     const timer = window.setTimeout(() => {
-      store.setFirstLaunch(false);
-      props.onComplete();
+      void completeWelcome();
     }, 900);
     return () => window.clearTimeout(timer);
   }, [props, status, store]);
+
+  async function completeWelcome(target?: WelcomeCompleteTarget) {
+    const nextTarget = target ?? await nextWelcomeTarget();
+    store.setFirstLaunch(false);
+    props.onComplete(nextTarget);
+  }
+
+  async function nextWelcomeTarget(): Promise<WelcomeCompleteTarget> {
+    try {
+      const summary = await window.workbenchClient.getSetupSummary();
+      const modelBlocked = summary.blocking.some((check) =>
+        check.id === "model" || check.id === "model-secret" || check.fixAction === "configure_model"
+      );
+      return modelBlocked ? "model" : "workbench";
+    } catch {
+      return "workbench";
+    }
+  }
 
   function applyInstallEvent(event: HermesInstallEvent) {
     const isRunning = event.stage !== "completed" && event.stage !== "failed" && event.stage !== "cancelled";
@@ -115,6 +137,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
     }
     if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
       setInstallStartTime(null);
+      setShowMirrorRetry(event.stage === "failed" && lastInstallSourceKindRef.current === "official");
       void refreshSetupChecks();
     }
   }
@@ -152,6 +175,14 @@ export function WelcomePage(props: { onComplete: () => void }) {
     }
   }
 
+  function openInstallSourceDialog() {
+    if (installRunningRef.current) return;
+    setSourceDialogOpen(true);
+    void detectSlowNetwork().then((hint) => {
+      if (hint) setNetworkHint(hint);
+    });
+  }
+
   async function handleAutoDeploy() {
     if (await shouldUseManualMacSetup()) {
       setStatus("not-found");
@@ -160,25 +191,37 @@ export function WelcomePage(props: { onComplete: () => void }) {
       setDetail("请先安装 Hermes Agent，然后点击“手动配置路径”选择 Hermes 根目录。");
       return;
     }
+    openInstallSourceDialog();
+  }
+
+  async function installWithSource(kind: InstallSourceChoice) {
     if (installRunningRef.current) return;
+    setSourceDialogOpen(false);
+    lastInstallSourceKindRef.current = kind;
+    setShowMirrorRetry(false);
     installRunningRef.current = true;
     setInstallStartTime(Date.now());
     setStatus("installing");
     setProgress((current) => Math.max(current, 12));
     setMessage("正在执行 Hermes 自动安装...");
-    setDetail("首次进入会自动检测环境、下载 Hermes、安装依赖并完成健康检查。");
+    setDetail(kind === "mirror"
+      ? "正在使用国内社区镜像下载安装脚本；安装过程仍会校验 Hermes 是否可启动。"
+      : "正在使用官方 GitHub 安装脚本；如果失败，可手动改用国内社区镜像重试。");
+    setInstallLogs([]);
+    setShowLogs(false);
     void refreshSetupChecks();
 
     try {
-      const result = await window.workbenchClient.installHermes();
+      const result = await window.workbenchClient.installHermes({ source: { kind } });
       installRunningRef.current = false;
       setMessage(result.message);
-      setDetail(result.ok ? detail : "安装失败，请导出诊断报告查看详情。");
+      setDetail(result.ok ? result.rootPath ?? "" : kind === "official" ? "官方源安装失败，可改用国内社区镜像重试。" : "镜像安装失败，请检查网络/镜像可达性，或切回官方源重试。");
       setProgress(result.ok ? 100 : 0);
       void refreshSetupChecks();
 
       if (!result.ok) {
         setStatus("not-found");
+        setShowMirrorRetry(kind === "official");
         return;
       }
 
@@ -198,7 +241,10 @@ export function WelcomePage(props: { onComplete: () => void }) {
       setStatus("not-found");
       setProgress(0);
       setMessage("Hermes 自动安装失败，请改用手动配置或重试");
-      setDetail(error instanceof Error ? error.message : "未知错误");
+      setDetail(kind === "official"
+        ? `${error instanceof Error ? error.message : "未知错误"}。可改用国内社区镜像重试。`
+        : `${error instanceof Error ? error.message : "未知错误"}。请检查网络/镜像可达性，或切回官方源重试。`);
+      setShowMirrorRetry(kind === "official");
       void refreshSetupChecks();
     }
   }
@@ -212,16 +258,15 @@ export function WelcomePage(props: { onComplete: () => void }) {
     setMessage(result.ok ? "正在取消安装" : "取消安装");
     setDetail(result.ok ? result.message : "当前没有可取消的安装进程。你可以重新自动安装，或查看官方文档手动配置路径。");
     setInstallLogs((prev) => [...prev, `[cancelled] ${result.message}`]);
+    setShowMirrorRetry(false);
   }
 
   function handleManualConfig() {
-    store.setFirstLaunch(false);
-    props.onComplete();
+    void completeWelcome("workbench");
   }
 
   function handleSkip() {
-    store.setFirstLaunch(false);
-    props.onComplete();
+    void completeWelcome("workbench");
   }
 
   async function shouldUseManualMacSetup() {
@@ -233,6 +278,12 @@ export function WelcomePage(props: { onComplete: () => void }) {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-rose-50">
+      <InstallSourceDialog
+        busy={installRunningRef.current}
+        onClose={() => setSourceDialogOpen(false)}
+        onSelect={(kind) => void installWithSource(kind)}
+        open={sourceDialogOpen}
+      />
       <div className="w-full max-w-md px-6">
         <div className="text-center">
           <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/25">
@@ -270,8 +321,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
               <button
                 className="mt-6 w-full rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:bg-indigo-700 hover:shadow-md active:scale-[0.98]"
                 onClick={() => {
-                  store.setFirstLaunch(false);
-                  props.onComplete();
+                  void completeWelcome();
                 }}
               >
                 <span className="flex items-center justify-center gap-2">
@@ -298,6 +348,17 @@ export function WelcomePage(props: { onComplete: () => void }) {
                   >
                     <span className="flex items-center justify-center gap-2">
                       <Sparkles size={16} /> 重新自动安装 Hermes
+                    </span>
+                  </button>
+                ) : null}
+                {showMirrorRetry && !macRuntime ? (
+                  <button
+                    className="w-full rounded-xl border border-amber-200 bg-amber-50 px-6 py-3 text-sm font-semibold text-amber-800 transition-all hover:bg-amber-100"
+                    onClick={() => void installWithSource("mirror")}
+                    type="button"
+                  >
+                    <span className="flex items-center justify-center gap-2">
+                      <Globe size={16} /> 改用国内社区镜像重试
                     </span>
                   </button>
                 ) : null}

@@ -53,6 +53,7 @@ export class RuntimeEnvResolver {
 
     const secret = profile.secretRef ? await this.secretVault.readSecret(profile.secretRef) : undefined;
     const providerProfile = config.providerProfiles?.find((item) => item.provider === profile.provider || item.id === profile.id);
+    const modelOption = providerProfile?.models.find((item) => item.id === profile.model || item.label === profile.model);
     const baseUrl = normalizeOpenAiCompatibleBaseUrl(profile.baseUrl ?? providerProfile?.baseUrl);
     const sourceType = normalizeSourceTypeForProfile({ sourceType: profile.sourceType, baseUrl, model: profile.model });
     const normalizedProfile = {
@@ -69,6 +70,7 @@ export class RuntimeEnvResolver {
       sourceType: normalizedProfile.sourceType,
       baseUrl,
       providerProfileId: providerProfile?.id,
+      contextWindow: modelOption?.contextWindow ?? profile.maxTokens,
       env: this.toEnv(normalizedProfile, secret),
     };
     const result = this.modelRuntimeProxy ? await this.modelRuntimeProxy.resolve(runtime) : runtime;

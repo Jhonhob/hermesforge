@@ -240,15 +240,17 @@ const api = {
   submitSponsorEntry: (input: SponsorSubmitInput) =>
     ipcRenderer.invoke(IpcChannels.submitSponsorEntry, input) as Promise<SponsorSubmitResult>,
   startTask: (input: StartTaskInput) => {
-    console.info("[Hermes Trace]", {
-      layer: "preload:startTask",
-      clientTaskId: input.clientTaskId,
-      taskType: input.taskType,
-      userInputLength: input.userInput.length,
-      workspacePath: input.workspacePath,
-      selectedFilesCount: input.selectedFiles?.length ?? 0,
-      attachmentsCount: input.attachments?.length ?? 0,
-    });
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[Hermes Trace]", {
+        layer: "preload:startTask",
+        clientTaskId: input.clientTaskId,
+        taskType: input.taskType,
+        userInputLength: input.userInput.length,
+        workspacePath: input.workspacePath,
+        selectedFilesCount: input.selectedFiles?.length ?? 0,
+        attachmentsCount: input.attachments?.length ?? 0,
+      });
+    }
     return ipcRenderer.invoke(IpcChannels.startTask, input) as Promise<TaskStartResult>;
   },
   cancelTask: (sessionId: string) => ipcRenderer.invoke(IpcChannels.cancelTask, sessionId) as Promise<boolean>,

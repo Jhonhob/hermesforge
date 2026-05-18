@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { EngineEvent, ModelProfile, PermissionOverview, RuntimeConfig, SessionAgentInsightUsage, TaskEventEnvelope, TaskRunProjection } from "../../../shared/types";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
@@ -34,7 +35,25 @@ type FixTarget = "model" | "hermes" | "health" | "diagnostics" | "workspace";
 type ProgressTone = "complete" | "waiting" | "failed";
 
 export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onOpenFix?: (target: FixTarget) => void }) {
-  const store = useAppStore();
+  const store = useAppStore(useShallow((state) => ({
+    activeSessionId: state.activeSessionId,
+    contextBundle: state.contextBundle,
+    events: state.events,
+    permissionOverview: state.permissionOverview,
+    providerProfiles: state.providerProfiles,
+    runningTaskRunId: state.runningTaskRunId,
+    runtimeConfig: state.runtimeConfig,
+    sessionAgentInsight: state.sessionAgentInsight,
+    taskRunOrderBySession: state.taskRunOrderBySession,
+    taskRunProjectionsById: state.taskRunProjectionsById,
+    webUiOverview: state.webUiOverview,
+    error: state.error,
+    info: state.info,
+    setActivePanel: state.setActivePanel,
+    setRuntimeConfig: state.setRuntimeConfig,
+    setWebUiOverview: state.setWebUiOverview,
+    success: state.success,
+  })));
   const [toolsOpen, setToolsOpen] = useState(false);
   const [taskDetailsOpen, setTaskDetailsOpen] = useState(false);
   const [savingKey, setSavingKey] = useState<string | undefined>();
@@ -290,7 +309,7 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
   );
 }
 
-function resolveActiveRun(store: ReturnType<typeof useAppStore.getState>): TaskRunProjection | undefined {
+function resolveActiveRun(store: Pick<ReturnType<typeof useAppStore.getState>, "activeSessionId" | "runningTaskRunId" | "taskRunOrderBySession" | "taskRunProjectionsById">): TaskRunProjection | undefined {
   if (store.runningTaskRunId && store.taskRunProjectionsById[store.runningTaskRunId]) {
     return store.taskRunProjectionsById[store.runningTaskRunId];
   }
@@ -306,7 +325,7 @@ function resolveModelProfile(runtimeConfig: RuntimeConfig | undefined, activeRun
     ?? profiles[0];
 }
 
-function resolveContextWindow(store: ReturnType<typeof useAppStore.getState>, modelProfile: ModelProfile | undefined, modelLabel: string) {
+function resolveContextWindow(store: Pick<ReturnType<typeof useAppStore.getState>, "providerProfiles" | "runtimeConfig">, modelProfile: ModelProfile | undefined, modelLabel: string) {
   const providerProfiles = store.runtimeConfig?.providerProfiles ?? store.providerProfiles;
   const matchedModel = providerProfiles
     .flatMap((profile) => profile.models)
@@ -314,7 +333,7 @@ function resolveContextWindow(store: ReturnType<typeof useAppStore.getState>, mo
   return matchedModel?.contextWindow ?? modelProfile?.maxTokens;
 }
 
-function activeSessionEvents(store: ReturnType<typeof useAppStore.getState>) {
+function activeSessionEvents(store: Pick<ReturnType<typeof useAppStore.getState>, "activeSessionId" | "events">) {
   if (!store.activeSessionId) return store.events;
   return store.events.filter((event) => event.workSessionId === store.activeSessionId);
 }

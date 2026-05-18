@@ -207,9 +207,16 @@ describe("HermesConnectorService helpers", () => {
     expect(env.OPENAI_BASE_URL).toBe("http://127.0.0.1:8080/v1");
     expect(env.OPENAI_MODEL).toBe("gpt-5.4");
     expect(env.PYTHONUTF8).toBe("1");
+    expect(env.PYTHONIOENCODING).toBe("utf-8:replace");
     expect(env.PYTHONUNBUFFERED).toBe("1");
     expect(env.HERMES_HOME).toBe("D:\\Forge\\.hermes\\profiles\\wechat");
-    expect(env.PYTHONPATH).toBe(["D:\\Hermes Agent", "parent-pythonpath"].join(path.delimiter));
+    expect(env.PYTHONPATH?.split(path.delimiter)).toEqual(expect.arrayContaining([
+      "D:\\Hermes Agent",
+      "parent-pythonpath",
+    ]));
+    if (process.platform === "win32") {
+      expect(env.PYTHONPATH).toContain("python-sitecustomize");
+    }
   });
 
   it("keeps Gateway WARNING stderr out of the red error channel", () => {
@@ -225,6 +232,14 @@ describe("HermesConnectorService helpers", () => {
       warnings: "",
       errors: expect.stringContaining("RuntimeError"),
     });
+  });
+
+  it("does not misread structured stopped Gateway status as running", () => {
+    expect(testOnly.looksLikeGatewayRunning('{"gateway_state":"stopped","running":false}')).toBe(false);
+    expect(testOnly.looksLikeGatewayRunning('Gateway status: running=false')).toBe(false);
+    expect(testOnly.looksLikeGatewayRunning('{"gateway_state":"running","running":true}')).toBe(true);
+    expect(testOnly.looksLikeGatewayRunning("Gateway is running")).toBe(true);
+    expect(testOnly.looksLikeGatewayRunning("Gateway is not running")).toBe(false);
   });
 
   it("fails Gateway startup preflight clearly when no real model can be synced", async () => {
@@ -411,6 +426,40 @@ describe("HermesConnectorService helpers", () => {
     expect(stateful.weixinQrProcess).toMatchObject({ killed: false });
     expect(stateful.weixinQrLineBuffer).toBe("pending-json");
     expect(stateful.activeWeixinQrRunId).toBe(2);
+  });
+
+  it("ignores stale Gateway close events after a replacement process starts", () => {
+    const service = new HermesConnectorService({} as never, {} as never, async () => "D:\\Hermes Agent");
+    const stateful = service as any;
+    const oldChild = { pid: 111, killed: false };
+    const newChild = { pid: 222, killed: false };
+    stateful.gatewayProcess = newChild;
+    stateful.gatewayStartedAt = "2026-04-23T00:00:00.000Z";
+    stateful.gatewayAutoStartState = "running";
+    stateful.gatewayAutoStartMessage = "Gateway 已自动启动。";
+
+    stateful.handleGatewayProcessClose(oldChild, 1);
+
+    expect(stateful.gatewayProcess).toBe(newChild);
+    expect(stateful.gatewayStartedAt).toBe("2026-04-23T00:00:00.000Z");
+    expect(stateful.gatewayAutoStartState).toBe("running");
+    expect(stateful.gatewayLastExitCode).toBeUndefined();
+  });
+
+  it("clears the tracked Gateway process when the current process exits", () => {
+    const service = new HermesConnectorService({} as never, {} as never, async () => "D:\\Hermes Agent");
+    const stateful = service as any;
+    const child = { pid: 333, killed: false };
+    stateful.gatewayProcess = child;
+    stateful.gatewayStartedAt = "2026-04-23T00:00:00.000Z";
+    stateful.gatewayAutoStartState = "running";
+
+    stateful.handleGatewayProcessClose(child, 0);
+
+    expect(stateful.gatewayProcess).toBeUndefined();
+    expect(stateful.gatewayStartedAt).toBeUndefined();
+    expect(stateful.gatewayLastExitCode).toBe(0);
+    expect(stateful.gatewayAutoStartState).toBe("idle");
   });
 
   it("does not mark QQ Bot as configured when no values or secrets exist", async () => {

@@ -112,7 +112,22 @@ describe("NativeInstallStrategy Windows installer", () => {
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain("安装脚本报告失败");
+    expect(result.message).toContain("可改用国内社区镜像重试");
     expect(config.enginePaths?.hermes).toBeUndefined();
+  });
+
+  it("uses the official GitHub Raw installer when official source is selected", async () => {
+    const downloadUrls: string[] = [];
+    mockOfficialInstaller({
+      script: "param([switch]$SkipSetup,[string]$HermesHome,[string]$InstallDir)",
+      downloadUrls,
+    });
+    const service = createStrategy();
+
+    const result = await service.install(undefined, { source: { kind: "official" } });
+
+    expect(result.ok).toBe(true);
+    expect(downloadUrls).toEqual(["https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1"]);
   });
 
   it("uses the community mirror installer only when mirror source is selected", async () => {
@@ -128,6 +143,84 @@ describe("NativeInstallStrategy Windows installer", () => {
     expect(result.ok).toBe(true);
     expect(downloadUrls).toEqual(["https://res1.hermesagent.org.cn/install.ps1"]);
     expect(config.hermesRuntime?.installSource?.sourceLabel).toBe("mirror");
+  });
+
+  it("records mirror installer URL, size, and SHA256 in install logs", async () => {
+    const script = "param([switch]$SkipSetup,[string]$HermesHome,[string]$InstallDir)";
+    mockOfficialInstaller({ script });
+    const service = createStrategy();
+
+    const result = await service.install(undefined, { source: { kind: "mirror" } });
+
+    expect(result.ok).toBe(true);
+    const log = result.log.join("\n");
+    expect(log).toContain("Hermes installer source URL: https://res1.hermesagent.org.cn/install.ps1");
+    expect(log).toContain(`Hermes installer content length: ${Buffer.byteLength(script, "utf8")} bytes`);
+    expect(log).toMatch(/Hermes installer SHA256: [0-9a-f]{64}/);
+  });
+
+  it("passes UTF-8 replacement and python-sitecustomize to installer Python environment", async () => {
+    mockOfficialInstaller({
+      script: "param([switch]$SkipSetup,[string]$HermesHome,[string]$InstallDir)",
+    });
+    const service = createStrategy();
+
+    const result = await service.install();
+
+    expect(result.ok).toBe(true);
+    const installerCall = runCommandMock.mock.calls.find(([command, args]) =>
+      command === "powershell.exe" && Array.isArray(args) && args.includes("-File")
+    );
+    expect(installerCall).toBeTruthy();
+    const env = installerCall?.[2]?.env as Record<string, string> | undefined;
+    expect(env?.PYTHONIOENCODING).toBe("utf-8:replace");
+    if (process.platform === "win32") {
+      expect(env?.PYTHONPATH).toContain("python-sitecustomize");
+    }
+  });
+
+  it("does not block the selected installer when system Git and winget are unavailable", async () => {
+    const installerRuns: string[][] = [];
+    mockOfficialInstaller({
+      script: "param([switch]$SkipSetup,[string]$HermesHome,[string]$InstallDir)",
+      installerRuns,
+      systemGitAvailable: false,
+      wingetAvailable: false,
+    });
+    const service = createStrategy();
+
+    const result = await service.install(undefined, { source: { kind: "mirror" } });
+
+    expect(result.ok).toBe(true);
+    expect(installerRuns).toHaveLength(1);
+    expect(result.log.join("\n")).toContain("未检测到系统 Git；将继续运行 Hermes 安装脚本");
+    expect(runCommandMock).not.toHaveBeenCalledWith(
+      "winget",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("does not block the selected installer when system Python and winget are unavailable", async () => {
+    const installerRuns: string[][] = [];
+    mockOfficialInstaller({
+      script: "param([switch]$SkipSetup,[string]$HermesHome,[string]$InstallDir)",
+      installerRuns,
+      systemPythonAvailable: false,
+      wingetAvailable: false,
+    });
+    const service = createStrategy();
+
+    const result = await service.install(undefined, { source: { kind: "mirror" } });
+
+    expect(result.ok).toBe(true);
+    expect(installerRuns).toHaveLength(1);
+    expect(result.log.join("\n")).toContain("未检测到系统 Python；将继续运行 Hermes 安装脚本");
+    expect(runCommandMock).not.toHaveBeenCalledWith(
+      "winget",
+      expect.any(Array),
+      expect.any(Object),
+    );
   });
 
   it("does not skip install when switching an existing install to a custom source", async () => {
@@ -248,6 +341,9 @@ function mockOfficialInstaller(input: {
   installerStdout?: string;
   createHermes?: boolean;
   downloadUrls?: string[];
+  systemGitAvailable?: boolean;
+  systemPythonAvailable?: boolean;
+  wingetAvailable?: boolean;
 }) {
   runCommandMock.mockImplementation(async (command: string, args: string[] = [], options?: { cwd?: string }) => {
     if (command === "powershell.exe" && args.includes("-Command") && args.some((arg) => arg.includes("Invoke-WebRequest"))) {
@@ -278,6 +374,20 @@ function mockOfficialInstaller(input: {
     }
     if (command === "powershell.exe" && args.at(-1)?.includes("$PSVersionTable")) {
       return { exitCode: 0, stdout: "5.1", stderr: "" };
+    }
+    if (command === "git") {
+      if (input.systemGitAvailable === false) {
+        return { exitCode: 1, stdout: "", stderr: "git missing" };
+      }
+      if (args[0] === "--version") {
+        return { exitCode: 0, stdout: "git version fixture", stderr: "" };
+      }
+    }
+    if (args.at(-1) === "--version" && input.systemPythonAvailable === false && /(?:^|[\\/])(python|py)(?:\.exe)?$/i.test(command)) {
+      return { exitCode: 1, stdout: "", stderr: "python missing" };
+    }
+    if (command === "winget" && input.wingetAvailable === false) {
+      return { exitCode: 1, stdout: "", stderr: "winget missing" };
     }
     return { exitCode: 0, stdout: `${command} ${args.join(" ")} ${options?.cwd ?? ""}`, stderr: "" };
   });

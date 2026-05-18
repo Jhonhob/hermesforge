@@ -11,7 +11,7 @@ describe("ChatInput", () => {
       workspacePath: "D:/workspace/demo",
       runtimeConfig: {
         defaultModelProfileId: "main",
-        modelProfiles: [{ id: "main", provider: "custom", model: "qwen" }],
+        modelProfiles: [{ id: "main", provider: "custom", model: "qwen", maxTokens: 1000 }],
         updateSources: {},
       },
       webUiOverview: {
@@ -70,5 +70,35 @@ describe("ChatInput", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(useAppStore.getState().pendingClarifyCards[0]?.question).toContain("/goal");
+  });
+
+  it("shows actual context usage and remaining window when usage events are available", () => {
+    useAppStore.setState({
+      taskEventsByRunId: {
+        "task-1": [{
+          taskRunId: "task-1",
+          workSessionId: "session-1",
+          sessionId: "task-1",
+          engineId: "hermes",
+          event: {
+            type: "usage",
+            inputTokens: 600,
+            outputTokens: 100,
+            totalTokens: 700,
+            estimatedCostUsd: 0,
+            source: "actual",
+            message: "actual",
+            at: "2026-05-18T10:00:00.000Z",
+          },
+        }],
+      },
+      userInput: "abcd",
+    });
+
+    renderInput();
+
+    const meter = screen.getByLabelText(/实测当前上下文占用/);
+    expect(meter).toHaveAttribute("aria-label", expect.stringContaining("701 tokens"));
+    expect(meter).toHaveAttribute("aria-label", expect.stringContaining("剩余：299 tokens"));
   });
 });

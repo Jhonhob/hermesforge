@@ -1,5 +1,6 @@
 import { PanelLeftOpen } from "lucide-react";
 import type { KeyboardEvent, PointerEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { SessionMetaPatch, WorkSession } from "../../shared/types";
 import { useAppStore } from "../store";
 import { ContextInspector } from "./ContextInspector";
@@ -47,7 +48,39 @@ export function DashboardView(props: {
   onOpenFix?: (target: FixTarget) => void;
   onRefreshWebUiOverview?: () => Promise<unknown>;
 }) {
-  const store = useAppStore();
+  const store = useAppStore(useShallow((state) => ({
+    activePanel: state.activePanel,
+    activeSessionId: state.activeSessionId,
+    agentPanelOpen: state.agentPanelOpen,
+    agentPanelWidth: state.agentPanelWidth,
+    attachments: state.attachments,
+    inspectorOpen: state.inspectorOpen,
+    locks: state.locks,
+    runtimeConfig: state.runtimeConfig,
+    selectedFiles: state.selectedFiles,
+    sessionSidebarOpen: state.sessionSidebarOpen,
+    sessionSidebarWidth: state.sessionSidebarWidth,
+    sessions: state.sessions,
+    setupSummary: state.setupSummary,
+    snapshots: state.snapshots,
+    taskRunOrderBySession: state.taskRunOrderBySession,
+    taskRunProjectionsById: state.taskRunProjectionsById,
+    taskType: state.taskType,
+    userInput: state.userInput,
+    workspaceDrawerOpen: state.workspaceDrawerOpen,
+    workspacePath: state.workspacePath,
+    runningTaskRunId: state.runningTaskRunId,
+    hermesStatus: state.hermesStatus,
+    setActivePanel: state.setActivePanel,
+    setAgentPanelOpen: state.setAgentPanelOpen,
+    setAgentPanelWidth: state.setAgentPanelWidth,
+    setInspectorOpen: state.setInspectorOpen,
+    setSessionSidebarOpen: state.setSessionSidebarOpen,
+    setSessionSidebarWidth: state.setSessionSidebarWidth,
+    setUserInput: state.setUserInput,
+    setView: state.setView,
+    setWorkspaceDrawerOpen: state.setWorkspaceDrawerOpen,
+  })));
   const latestSnapshot = store.snapshots[0];
   const activeLock = store.locks[0];
   const sendBlock = computeSendBlock(store);
@@ -310,7 +343,7 @@ function clampPanelWidth(width: number, panel: ResizablePanel, otherPanelWidth: 
   return Math.round(Math.min(Math.max(width, min), max, responsiveMax));
 }
 
-function computeSendBlock(store: ReturnType<typeof useAppStore.getState>): { message: string; target?: FixTarget } | undefined {
+function computeSendBlock(store: Pick<ReturnType<typeof useAppStore.getState>, "attachments" | "hermesStatus" | "runtimeConfig" | "runningTaskRunId" | "selectedFiles" | "setupSummary" | "taskType" | "userInput" | "workspacePath">): { message: string; target?: FixTarget } | undefined {
   if (store.runningTaskRunId) return { message: "当前任务运行中，完成或停止后再发送。" };
   if (!store.userInput.trim() && store.attachments.length === 0) return { message: "写一句需求或添加附件后就能发送。" };
   if (!store.workspacePath.trim() && promptNeedsWorkspace(store.userInput, store.selectedFiles)) {

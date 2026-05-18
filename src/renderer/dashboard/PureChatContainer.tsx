@@ -1,6 +1,7 @@
-import { AlertCircle, Brain, ChevronDown, Copy, Ellipsis, Loader2, RefreshCcw, Sparkles, Timer, Wrench } from "lucide-react";
+import { AlertCircle, Brain, ChevronDown, Copy, Ellipsis, FileDown, Loader2, RefreshCcw, Sparkles, Timer, Wrench } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { EngineEvent, TaskEventEnvelope, TaskRunProjection, ToolEvent } from "../../shared/types";
 import { StreamingMarkdown } from "../markdown/StreamingMarkdown";
 import { useAppStore } from "../store";
@@ -8,6 +9,10 @@ import { ChatInput } from "./ChatInput";
 import { cn, formatShortDate } from "./DashboardPrimitives";
 
 type FixTarget = "model" | "hermes" | "health" | "diagnostics" | "workspace";
+const CHAT_RUN_WINDOW_INITIAL = 64;
+const CHAT_RUN_WINDOW_STEP = 40;
+const EMPTY_EVENTS: TaskEventEnvelope[] = [];
+const LONG_REPLY_FILE_THRESHOLD = 12_000;
 
 export function PureChatContainer(props: {
   runs: TaskRunProjection[];
@@ -25,9 +30,12 @@ export function PureChatContainer(props: {
   latestSnapshotAvailable: boolean;
   locked: boolean;
 }) {
-  const store = useAppStore();
+  const workspacePath = useAppStore((state) => state.workspacePath);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const composerShellRef = useRef<HTMLDivElement | null>(null);
   const [followBottom, setFollowBottom] = useState(true);
+  const [composerHeight, setComposerHeight] = useState(156);
+  const [renderLimit, setRenderLimit] = useState(CHAT_RUN_WINDOW_INITIAL);
   const visibleRuns = useMemo(
     () =>
       props.runs.slice().sort((left, right) => {
@@ -36,6 +44,8 @@ export function PureChatContainer(props: {
       }),
     [props.runs],
   );
+  const renderedRuns = useMemo(() => visibleRuns.slice(-renderLimit), [renderLimit, visibleRuns]);
+  const hiddenRunCount = Math.max(0, visibleRuns.length - renderedRuns.length);
   const lastRun = visibleRuns[visibleRuns.length - 1];
   const latestRunSignature = lastRun
     ? `${lastRun.taskRunId}:${lastRun.status}:${lastRun.assistantMessage.content.length}:${lastRun.toolEvents.length}`
@@ -58,39 +68,85 @@ export function PureChatContainer(props: {
     };
   }, [latestRunSignature, followBottom, visibleRuns.length]);
 
+  useEffect(() => {
+    if (visibleRuns.length <= CHAT_RUN_WINDOW_INITIAL) {
+      setRenderLimit(CHAT_RUN_WINDOW_INITIAL);
+    }
+  }, [visibleRuns.length]);
+
+  useEffect(() => {
+    const composer = composerShellRef.current;
+    if (!composer) return undefined;
+
+    const updateComposerHeight = () => {
+      setComposerHeight(Math.ceil(composer.getBoundingClientRect().height || 156));
+    };
+    updateComposerHeight();
+
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(updateComposerHeight);
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, []);
+
   return (
-    <div className="hermes-chat-shell relative flex h-full min-h-0 flex-col bg-white">
+    <div className="hermes-chat-shell relative flex h-full min-h-0 flex-col bg-[#f6f7f9]">
       <div
         className="hermes-chat-scroll custom-scrollbar min-h-0 flex-1 overflow-y-auto bg-[#f6f7f9] px-4 py-5 sm:px-6"
+        data-testid="chat-scroll"
         onScroll={(event) => {
           const el = event.currentTarget;
+          if (el.scrollTop < 96 && renderLimit < visibleRuns.length) {
+            setRenderLimit((current) => Math.min(visibleRuns.length, current + CHAT_RUN_WINDOW_STEP));
+          }
           setFollowBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 160);
         }}
       >
         <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-5 2xl:max-w-[1240px]">
           {visibleRuns.length === 0 ? (
             <EmptyPureChat
-              hasWorkspace={Boolean(store.workspacePath)}
+              hasWorkspace={Boolean(workspacePath)}
               onUsePromptSuggestion={props.onUsePromptSuggestion}
               onPickWorkspace={props.onPickWorkspace}
             />
-          ) : visibleRuns.map((run) => <PureRun key={run.taskRunId} run={run} onOpenFix={props.onOpenFix} />)}
+          ) : (
+            <>
+              {hiddenRunCount > 0 ? (
+                <button
+                  className="mx-auto rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[12px] font-semibold text-slate-500 shadow-sm transition hover:border-[var(--hermes-primary-border)] hover:text-[var(--hermes-primary)]"
+                  data-testid="load-older-runs"
+                  onClick={() => setRenderLimit((current) => Math.min(visibleRuns.length, current + CHAT_RUN_WINDOW_STEP))}
+                  type="button"
+                >
+                  显示更早的 {hiddenRunCount} 轮对话
+                </button>
+              ) : null}
+              {renderedRuns.map((run) => <PureRun key={run.taskRunId} run={run} onOpenFix={props.onOpenFix} />)}
+            </>
+          )}
           <PendingNativeCards />
           <div ref={bottomRef} />
         </div>
       </div>
 
       {!followBottom ? (
-        <button
-          className="sticky bottom-4 left-1/2 z-10 -translate-x-1/2 self-center rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_8px_30px_rgb(0,0,0,0.04)]"
-          onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-          type="button"
+        <div
+          className="pointer-events-none absolute inset-x-0 z-20 flex justify-center"
+          data-testid="scroll-to-bottom-overlay"
+          style={{ bottom: composerHeight + 12 }}
         >
-          回到底部
-        </button>
+          <button
+            aria-label="回到底部"
+            className="pointer-events-auto rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-[12px] font-semibold text-slate-600 shadow-[0_8px_30px_rgba(15,23,42,0.10)] backdrop-blur transition hover:bg-white hover:text-slate-900"
+            onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
+            type="button"
+          >
+            回到底部
+          </button>
+        </div>
       ) : null}
 
-      <div className="hermes-composer-shell shrink-0 border-t border-slate-200/70 bg-white/90">
+      <div ref={composerShellRef} className="hermes-composer-shell shrink-0 bg-[#f6f7f9]">
         <ChatInput
           onStartTask={props.onStartTask}
           onCancelTask={props.onCancelTask}
@@ -111,9 +167,18 @@ export function PureChatContainer(props: {
 }
 
 function PendingNativeCards() {
-  const store = useAppStore();
-  const approvals = store.pendingApprovalCards.filter((card) => card.status === "pending");
-  const clarifies = store.pendingClarifyCards.filter((card) => card.status === "pending");
+  const store = useAppStore(useShallow((state) => ({
+    pendingApprovalCards: state.pendingApprovalCards,
+    pendingClarifyCards: state.pendingClarifyCards,
+    lastWebUiError: state.lastWebUiError,
+    setLastWebUiError: state.setLastWebUiError,
+    resolveApprovalCard: state.resolveApprovalCard,
+    resolveClarifyCard: state.resolveClarifyCard,
+    setUserInput: state.setUserInput,
+    error: state.error,
+  })));
+  const approvals = useMemo(() => store.pendingApprovalCards.filter((card) => card.status === "pending"), [store.pendingApprovalCards]);
+  const clarifies = useMemo(() => store.pendingClarifyCards.filter((card) => card.status === "pending"), [store.pendingClarifyCards]);
   if (!approvals.length && !clarifies.length && !store.lastWebUiError) return null;
 
   return (
@@ -169,7 +234,7 @@ function runTimestamp(run: TaskRunProjection) {
 
 function PureRun(props: { run: TaskRunProjection; onOpenFix?: (target: FixTarget) => void }) {
   return (
-    <section className="flex flex-col gap-2">
+    <section className="flex flex-col gap-2" data-testid="chat-run">
       {props.run.userMessage ? (
         <ChatMessageCard
           role="user"
@@ -220,9 +285,9 @@ function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string;
 
 function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (target: FixTarget) => void }) {
   const { run } = props;
-  const store = useAppStore();
+  const eventsForRun = useAppStore((state) => state.taskEventsByRunId[run.taskRunId]) ?? EMPTY_EVENTS;
+  const showUsage = useAppStore((state) => state.webUiOverview?.settings.showUsage);
   const content = run.assistantMessage.content.trim();
-  const eventsForRun = store.taskEventsByRunId[run.taskRunId] || [];
   const usage = useMemo(() => {
     for (let i = eventsForRun.length - 1; i >= 0; i--) {
       if (eventsForRun[i].event.type === "usage") return eventsForRun[i].event as Extract<EngineEvent, { type: "usage" }>;
@@ -240,18 +305,19 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
     try {
       const result = await window.workbenchClient.writeClipboard(run.assistantMessage.content);
       if (result.ok) {
-        store.success("已复制回复", "当前消息内容已写入剪贴板");
+        useAppStore.getState().success("已复制回复", "当前消息内容已写入剪贴板");
       } else {
-        store.error("复制失败", "无法写入剪贴板");
+        useAppStore.getState().error("复制失败", "无法写入剪贴板");
       }
     } catch (error) {
-      store.error("复制失败", error instanceof Error ? error.message : "无法写入剪贴板");
+      useAppStore.getState().error("复制失败", error instanceof Error ? error.message : "无法写入剪贴板");
     }
   }
 
   function continueMessage() {
-    store.setUserInput("继续，保持当前上下文往下完成。");
-    store.info("已填入继续指令", "可以直接发送，让 Hermes 在当前上下文继续处理");
+    const feedback = useAppStore.getState();
+    feedback.setUserInput("继续，保持当前上下文往下完成。");
+    feedback.info("已填入继续指令", "可以直接发送，让 Hermes 在当前上下文继续处理");
   }
 
   return (
@@ -265,7 +331,7 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {run.modelId ? <MessageMetaPill>{run.modelId}</MessageMetaPill> : null}
               <ElapsedTimePill startedAt={run.startedAt} completedAt={run.completedAt} active={activeTiming} />
-              {store.webUiOverview?.settings.showUsage && usage?.type === "usage" ? (
+              {showUsage && usage?.type === "usage" ? (
                 <MessageMetaPill tone="emerald">
                   {usage.source === "actual" ? "实测" : "约"} {usage.inputTokens}+{usage.outputTokens} token
                 </MessageMetaPill>
@@ -297,7 +363,8 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
           ) : (
             <div className="hermes-assistant-bubble relative rounded-[22px] border border-[var(--hermes-primary-border)] bg-[var(--hermes-primary-soft)] p-4 before:absolute before:left-0 before:top-5 before:h-10 before:w-1 before:rounded-r-full before:bg-[var(--hermes-primary)]">
               {thoughtStatus.visible && thoughtStatus.phase !== "replying" ? <ThoughtStatusStrip status={thoughtStatus} /> : null}
-              <StreamingMarkdown content={run.assistantMessage.content} isStreaming={run.status === "streaming"} className="prose prose-slate max-w-none break-words text-[14px] leading-relaxed text-slate-800 [overflow-wrap:anywhere] prose-p:my-3 prose-ul:my-3 prose-ol:my-3 prose-li:my-1.5 prose-li:leading-relaxed" />
+              <StreamingMarkdown content={run.assistantMessage.content} isStreaming={run.status === "streaming"} className="hermes-markdown max-w-none break-words text-[14px] leading-relaxed text-slate-800 [overflow-wrap:anywhere]" />
+              {completed && run.assistantMessage.content.length > LONG_REPLY_FILE_THRESHOLD ? <LongReplyExportHint run={run} /> : null}
               {softStreaming ? <SoftStreamingHint /> : null}
             </div>
           )}
@@ -306,6 +373,27 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
         </>
       )}
     />
+  );
+}
+
+function LongReplyExportHint(props: { run: TaskRunProjection }) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--hermes-primary-border)] bg-white/80 px-3 py-2.5 text-[12px] text-slate-600 shadow-sm">
+      <span className="inline-flex min-w-0 items-center gap-2">
+        <FileDown size={14} className="shrink-0 text-[var(--hermes-primary)]" />
+        <span className="min-w-0">
+          这条回复较长，建议导出为 Markdown 文件保存或转发。
+        </span>
+      </span>
+      <button
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[var(--hermes-primary)] px-3 text-[12px] font-semibold text-white transition hover:bg-[var(--hermes-primary-strong)]"
+        onClick={() => void exportAssistantMessage(props.run)}
+        type="button"
+      >
+        <FileDown size={13} />
+        导出 Markdown
+      </button>
+    </div>
   );
 }
 
@@ -432,7 +520,6 @@ function MessageActionButton(props: { icon: typeof Copy; label: string; onClick:
 }
 
 function AssistantMoreMenu(props: { run: TaskRunProjection; onCopy: () => void; onContinue: () => void }) {
-  const store = useAppStore();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -448,25 +535,9 @@ function AssistantMoreMenu(props: { run: TaskRunProjection; onCopy: () => void; 
   }, [open]);
 
   function fillPrompt(text: string, toast: string) {
+    const store = useAppStore.getState();
     store.setUserInput(text);
     store.info("已填入后续动作", toast);
-    setOpen(false);
-  }
-
-  async function exportMessage() {
-    try {
-      const result = await window.workbenchClient.exportMessage({
-        content: props.run.assistantMessage.content,
-        suggestedName: `hermes-${props.run.taskRunId}.md`,
-      });
-      if (result.ok) {
-        store.success("导出成功", result.message ?? "消息已保存");
-      } else {
-        store.error("导出失败", result.message ?? "保存文件时出错");
-      }
-    } catch (error) {
-      store.error("导出失败", error instanceof Error ? error.message : "无法保存文件");
-    }
     setOpen(false);
   }
 
@@ -479,11 +550,30 @@ function AssistantMoreMenu(props: { run: TaskRunProjection; onCopy: () => void; 
           <MenuAction label="风格解析" onClick={() => fillPrompt("请分析你刚才这份输出的表达风格、结构与可复用模板。", "已填入风格解析指令")} />
           <MenuAction label="配色提取" onClick={() => fillPrompt("请从你刚才的输出里提取可复用的配色、层级和界面语言建议。", "已填入配色提取指令")} />
           <MenuAction label="复制全文" onClick={props.onCopy} />
-          <MenuAction label="导出结果" onClick={exportMessage} />
+          <MenuAction label="导出结果" onClick={() => {
+            void exportAssistantMessage(props.run);
+            setOpen(false);
+          }} />
         </div>
       ) : null}
     </div>
   );
+}
+
+async function exportAssistantMessage(run: TaskRunProjection) {
+  try {
+    const result = await window.workbenchClient.exportMessage({
+      content: run.assistantMessage.content,
+      suggestedName: `hermes-${run.taskRunId}.md`,
+    });
+    if (result.ok) {
+      useAppStore.getState().success("导出成功", result.message ?? "消息已保存");
+    } else {
+      useAppStore.getState().error("导出失败", result.message ?? "保存文件时出错");
+    }
+  } catch (error) {
+    useAppStore.getState().error("导出失败", error instanceof Error ? error.message : "无法保存文件");
+  }
 }
 
 function MenuAction(props: { label: string; onClick: () => void }) {

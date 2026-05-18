@@ -8,7 +8,9 @@ import { CodeBlock } from "./CodeBlock";
 type Block = { content: string; code: boolean };
 
 export function StreamingMarkdown(props: { content: string; isStreaming?: boolean; className?: string; onFileClick?: (path: string) => void }) {
-  const blocks = splitIntoBlocks(props.content);
+  const deferredContent = React.useDeferredValue(props.content);
+  const content = props.isStreaming ? compactStreamingMarkdown(deferredContent) : props.content;
+  const blocks = React.useMemo(() => splitIntoBlocks(content), [content]);
   return (
     <div className={props.className}>
       {blocks.map((block, index) => {
@@ -18,6 +20,17 @@ export function StreamingMarkdown(props: { content: string; isStreaming?: boolea
       })}
     </div>
   );
+}
+
+const STREAMING_MARKDOWN_PREVIEW_CHARS = 48_000;
+const STREAMING_MARKDOWN_TAIL_CHARS = 20_000;
+
+function compactStreamingMarkdown(content: string) {
+  if (content.length <= STREAMING_MARKDOWN_PREVIEW_CHARS) return content;
+  const tail = content.slice(-STREAMING_MARKDOWN_TAIL_CHARS);
+  const lineBreak = tail.indexOf("\n");
+  const trimmedTail = lineBreak > 0 ? tail.slice(lineBreak + 1) : tail;
+  return `> 正在生成长回复，已临时折叠前文以保持输入流畅。完成后会显示完整内容。\n\n${trimmedTail}`;
 }
 
 const MemoizedMarkdownBlock = React.memo(function MarkdownBlock(props: { content: string; onFileClick?: (path: string) => void }) {
@@ -31,6 +44,33 @@ const MemoizedMarkdownBlock = React.memo(function MarkdownBlock(props: { content
           const content = String(children).replace(/\n$/, "");
           if (match) return <CodeBlock code={content} language={match[1]} />;
           return <code className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.92em] text-slate-800">{children}</code>;
+        },
+        hr() {
+          return <hr className="my-4 border-slate-200/80" />;
+        },
+        blockquote({ children }) {
+          return <blockquote className="my-3 border-l-4 border-[var(--hermes-primary-border)] bg-white/55 py-2 pl-3 pr-4 text-slate-600">{children}</blockquote>;
+        },
+        table({ children }) {
+          return (
+            <div className="my-4 overflow-x-auto rounded-xl border border-slate-200/80 bg-white/70 shadow-sm">
+              <table className="min-w-full table-auto border-collapse text-left text-[13px] leading-5 [overflow-wrap:normal]">
+                {children}
+              </table>
+            </div>
+          );
+        },
+        thead({ children }) {
+          return <thead className="bg-slate-50/90 text-slate-700">{children}</thead>;
+        },
+        tbody({ children }) {
+          return <tbody className="divide-y divide-slate-200/70">{children}</tbody>;
+        },
+        th({ children }) {
+          return <th className="whitespace-nowrap px-3 py-2 font-semibold text-slate-700">{children}</th>;
+        },
+        td({ children }) {
+          return <td className="min-w-[8rem] whitespace-normal px-3 py-2 align-top text-slate-600 [overflow-wrap:break-word]">{children}</td>;
         },
         a({ href, children }) {
           const value = href ?? "";

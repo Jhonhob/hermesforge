@@ -85,6 +85,36 @@ describe("SessionLog.readRecent", () => {
     expect(readFile).not.toHaveBeenCalledWith(filePath, "utf8");
     readFile.mockRestore();
   });
+
+  it("restores complete recent task runs for a work session even when the latest reply has many chunks", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-session-log-"));
+    tempRoots.push(root);
+    const appPaths = new AppPaths(root);
+    const sessionLog = new SessionLog(appPaths);
+    const workspaceId = appPaths.workspaceId(path.join(root, "workspace"));
+
+    await sessionLog.append(workspaceId, eventFor("task-previous", "session-long", "previous", "2026-04-22T10:00:00.000Z"));
+    for (let index = 0; index < 260; index += 1) {
+      await sessionLog.append(
+        workspaceId,
+        chunkEventFor(
+          "task-long-reply",
+          "session-long",
+          `chunk-${index};`,
+          `2026-04-22T10:01:${String(index % 60).padStart(2, "0")}.${String(index).padStart(3, "0")}Z`,
+        ),
+      );
+    }
+    await sessionLog.append(workspaceId, eventFor("task-long-reply", "session-long", "final", "2026-04-22T10:02:00.000Z"));
+
+    const cappedRawEvents = await sessionLog.readRecent(workspaceId, 200, "session-long");
+    const restoredRuns = await sessionLog.readRecentSessionRuns(workspaceId, "session-long", 2);
+
+    expect(cappedRawEvents.some((event) => event.taskRunId === "task-previous")).toBe(false);
+    expect(restoredRuns.some((event) => event.taskRunId === "task-previous")).toBe(true);
+    expect(restoredRuns.filter((event) => event.taskRunId === "task-long-reply")).toHaveLength(261);
+    expect(restoredRuns.at(-1)?.event.type).toBe("result");
+  });
 });
 
 describe("SessionLog.aggregateUsageForSession", () => {
@@ -112,6 +142,36 @@ describe("SessionLog.aggregateUsageForSession", () => {
       updatedAt: "2026-04-22T10:00:02.000Z",
     });
   });
+
+  it("aggregates usage across mixed files while ignoring other sessions and corrupt lines", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-session-log-"));
+    tempRoots.push(root);
+    const appPaths = new AppPaths(root);
+    const sessionLog = new SessionLog(appPaths);
+    const workspaceId = appPaths.workspaceId(path.join(root, "workspace"));
+    const dir = appPaths.workspaceSessionDir(workspaceId);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "first.jsonl"), [
+      JSON.stringify(usageEventFor("task-1", "session-a", 10, 5, 0.001, "2026-04-22T10:00:00.000Z")),
+      "{bad json",
+      JSON.stringify(usageEventFor("task-1", "session-b", 900, 900, 9, "2026-04-22T10:00:01.000Z")),
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(dir, "second.jsonl"), [
+      JSON.stringify(usageEventFor("task-1", "session-a", 20, 7, 0.002, "2026-04-22T10:00:02.000Z")),
+      JSON.stringify(usageEventFor("task-2", "session-a", 30, 8, 0.003, "2026-04-22T10:00:03.000Z")),
+    ].join("\n"), "utf8");
+
+    const usage = await sessionLog.aggregateUsageForSession(workspaceId, "session-a");
+
+    expect(usage).toMatchObject({
+      totalInputTokens: 50,
+      totalOutputTokens: 15,
+      totalEstimatedCostUsd: 0.005,
+      latestInputTokens: 30,
+      latestOutputTokens: 8,
+      updatedAt: "2026-04-22T10:00:03.000Z",
+    });
+  });
 });
 
 function eventFor(taskRunId: string, workSessionId: string, detail: string, at = "2026-04-22T00:00:00.000Z"): TaskEventEnvelope {
@@ -125,6 +185,20 @@ function eventFor(taskRunId: string, workSessionId: string, detail: string, at =
       success: true,
       title: "Hermes 回复",
       detail,
+      at,
+    },
+  };
+}
+
+function chunkEventFor(taskRunId: string, workSessionId: string, content: string, at: string): TaskEventEnvelope {
+  return {
+    taskRunId,
+    workSessionId,
+    sessionId: taskRunId,
+    engineId: "hermes",
+    event: {
+      type: "message_chunk",
+      content,
       at,
     },
   };

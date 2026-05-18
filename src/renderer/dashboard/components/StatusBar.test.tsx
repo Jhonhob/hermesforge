@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StatusBar } from "./StatusBar";
 import { useAppStore } from "../../store";
@@ -8,7 +8,7 @@ describe("StatusBar", () => {
     useAppStore.getState().resetStore();
   });
 
-  it("lights API and Hermes from cached store status without probing Gateway", () => {
+  it("summarizes healthy status into one quiet entry and expands details on demand", () => {
     useAppStore.setState({
       runtimeConfig: {
         hermesRuntime: { mode: "wsl", pythonCommand: "python3", windowsAgentMode: "hermes_native", cliPermissionMode: "guarded", permissionPolicy: "bridge_guarded" },
@@ -56,10 +56,15 @@ describe("StatusBar", () => {
 
     render(<StatusBar />);
 
-    // Both compact dots and full chips render the same buttons
-    expect(screen.getAllByRole("button", { name: "API 连接正常" }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByRole("button", { name: "Hermes 已连接 · 当前运行：WSL" }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByRole("button", { name: "Gateway 状态未刷新" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("button", { name: /环境就绪/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("status-light-api")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /环境就绪/ }));
+
+    expect(screen.getByText("API")).toBeInTheDocument();
+    expect(screen.getByText("Hermes")).toBeInTheDocument();
+    expect(screen.getByText("Gateway")).toBeInTheDocument();
+    expect(screen.getByText("更新")).toBeInTheDocument();
     expect(screen.getByTestId("status-light-api")).toHaveClass("hermes-status-light--ok");
     expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--ok");
     expect(screen.getByTestId("status-light-gateway")).toHaveClass("hermes-status-light--idle");
@@ -94,6 +99,8 @@ describe("StatusBar", () => {
 
     render(<StatusBar />);
 
+    expect(screen.getByRole("button", { name: /有提醒/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /有提醒/ }));
     expect(screen.getByTestId("status-light-api")).toHaveClass("hermes-status-light--warn");
     expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--warn");
     expect(screen.getByTestId("status-light-gateway")).toHaveClass("hermes-status-light--idle");
@@ -101,7 +108,7 @@ describe("StatusBar", () => {
     expect(getHermesProbe).not.toHaveBeenCalled();
   });
 
-  it("turns the Hermes chip into a visible update reminder", () => {
+  it("turns Hermes updates into a visible reminder summary", () => {
     useAppStore.setState({
       clientInfo: {
         appVersion: "0.1.2",
@@ -143,9 +150,62 @@ describe("StatusBar", () => {
 
     render(<StatusBar />);
 
-    const updateButtons = screen.getAllByRole("button", { name: /Hermes 有新版本可更新/ });
-    expect(updateButtons.length).toBeGreaterThanOrEqual(1);
-    expect(updateButtons.some((btn) => btn.textContent?.includes("Hermes 更新"))).toBe(true);
+    expect(screen.getByRole("button", { name: /有提醒/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /有提醒/ }));
+    expect(screen.getByText("Hermes 更新")).toBeInTheDocument();
+    expect(screen.getAllByText(/Hermes 有新版本可更新/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--warn");
+  });
+
+  it("prioritizes gateway errors in the summary", async () => {
+    useAppStore.setState({
+      clientInfo: {
+        appVersion: "0.1.2",
+        userDataPath: "D:/temp",
+        portable: false,
+        rendererMode: "dev",
+      },
+      hermesStatus: {
+        engine: {
+          engineId: "hermes",
+          label: "Hermes",
+          available: true,
+          mode: "cli",
+          message: "Hermes 已连接",
+        },
+        update: {
+          engineId: "hermes",
+          updateAvailable: false,
+          sourceConfigured: true,
+          message: "最新",
+        },
+        memory: {
+          engineId: "hermes",
+          workspaceId: "workspace",
+          usedCharacters: 100,
+          entries: 2,
+          message: "ok",
+        },
+      },
+    });
+
+    window.workbenchClient = {
+      ...window.workbenchClient,
+      getGatewayStatus: vi.fn().mockResolvedValue({
+        running: false,
+        managedRunning: false,
+        healthStatus: "error",
+        message: "Gateway exited with code 1.",
+        checkedAt: "2026-04-21T01:00:00.000Z",
+      }),
+      onClientUpdateEvent: vi.fn().mockReturnValue(() => undefined),
+    };
+
+    render(<StatusBar />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /环境需处理/ })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /环境需处理/ }));
+    expect(screen.getAllByText("Gateway exited with code 1.").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("status-light-gateway")).toHaveClass("hermes-status-light--error");
   });
 });

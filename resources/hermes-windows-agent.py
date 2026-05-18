@@ -26,9 +26,57 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Patch subprocess.Popen early so that any downstream code (including
+# run_agent) gets the fixed behaviour.  On Windows, child processes such as
+# cmd.exe or git bash may emit GBK-encoded bytes even when Python's default
+# encoding is UTF-8.  Without errors='replace', the internal _readerthread
+# crashes with UnicodeDecodeError and the command output is lost.
+if os.name == "nt":
+    _original_popen_init = subprocess.Popen.__init__
+
+    def _patched_popen_init(self, *args, **kwargs):
+        # universal_newlines can be passed as the 9th positional arg (index 8).
+        has_text = bool(kwargs.get("text") or kwargs.get("universal_newlines"))
+        if not has_text and len(args) > 8 and args[8]:
+            has_text = True
+        if has_text and "errors" not in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["errors"] = "replace"
+        if "encoding" in kwargs and "errors" not in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["errors"] = "replace"
+        return _original_popen_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _patched_popen_init
+
+    # Last-resort safety net: suppress the unhandled _readerthread
+    # UnicodeDecodeError so it doesn't spam stderr and wedge the gateway.
+    _original_thread_excepthook = threading.excepthook
+
+    def _patched_thread_excepthook(args):
+        if (
+            args.exc_type is UnicodeDecodeError
+            and args.thread.name == "_readerthread"
+            and "utf-8" in str(args.exc_value)
+        ):
+            # The reader thread died, but we can't recover its output here.
+            # Log a short warning and swallow the exception so the main thread
+            # (and communicate()) is not affected.
+            print(
+                f"Warning: subprocess reader thread dropped output due to "
+                f"encoding mismatch ({args.exc_value}).",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        _original_thread_excepthook(args)
+
+    threading.excepthook = _patched_thread_excepthook
 
 
 EVENT_START = "__FORGE_EVENT__"
@@ -168,6 +216,115 @@ def _load_session_history(session_db, session_id: str | None) -> list[dict]:
         for item in messages
         if item.get("role") in ("user", "assistant") and isinstance(item.get("content"), str) and item.get("content").strip()
     ]
+
+
+def _estimate_tokens(text: str) -> int:
+    ascii_count = 0
+    non_ascii_count = 0
+    for char in text or "":
+        if char.isspace():
+            continue
+        if ord(char) <= 0x7F:
+            ascii_count += 1
+        else:
+            non_ascii_count += 1
+    return int((ascii_count / 4) + (non_ascii_count * 0.9) + 0.999)
+
+
+def _message_tokens(message: dict) -> int:
+    return _estimate_tokens(str(message.get("content") or "")) + 8
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    if max_chars <= 20:
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - 3].rstrip() + "..."
+
+
+def _summarize_history_messages(messages: list[dict], max_chars: int) -> str:
+    user_points = []
+    assistant_points = []
+    for item in messages:
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        first_lines = [line.strip() for line in content.splitlines() if line.strip()]
+        preview = _truncate_text(" ".join(first_lines[:3]), 220)
+        if item.get("role") == "user":
+            user_points.append(preview)
+        elif item.get("role") == "assistant":
+            assistant_points.append(preview)
+
+    parts = [
+        "以下是 Forge 为避免超过模型上下文窗口而自动压缩的较早对话摘要。"
+        "这些内容来自同一会话，请作为背景参考；后面的原始最近对话优先级更高。",
+        f"较早历史共 {len(messages)} 条消息。",
+    ]
+    if user_points:
+        parts.append("较早用户诉求：")
+        parts.extend(f"- {point}" for point in user_points[-10:])
+    if assistant_points:
+        parts.append("较早助手结论/行动：")
+        parts.extend(f"- {point}" for point in assistant_points[-10:])
+
+    summary = "\n".join(parts)
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
+def _context_window_from_env() -> int:
+    value = _int_value(os.environ.get("HERMES_FORGE_CONTEXT_WINDOW"), 0)
+    if value > 0:
+        return value
+    return 256_000
+
+
+def _compact_conversation_history(history: list[dict], query, session_id: str | None) -> list[dict]:
+    if not history:
+        return history
+    context_window = max(8_000, _context_window_from_env())
+    query_text = _text_from_message_content(query)
+    output_reserve = max(4_096, min(32_000, int(context_window * 0.15)))
+    history_budget = max(4_000, int(context_window * 0.85) - output_reserve - _estimate_tokens(query_text))
+    current_tokens = sum(_message_tokens(item) for item in history)
+    if current_tokens <= history_budget:
+        return history
+
+    tail_budget = max(2_000, int(history_budget * 0.68))
+    tail: list[dict] = []
+    tail_tokens = 0
+    for item in reversed(history):
+        cost = _message_tokens(item)
+        if tail and tail_tokens + cost > tail_budget:
+            break
+        tail.append(item)
+        tail_tokens += cost
+    tail.reverse()
+
+    older = history[: max(0, len(history) - len(tail))]
+    summary_budget_tokens = max(800, history_budget - tail_tokens - 64)
+    summary_max_chars = max(1_200, min(24_000, summary_budget_tokens * 3))
+    summary = _summarize_history_messages(older, summary_max_chars)
+    compacted = [{"role": "user", "content": summary}, *tail]
+
+    while sum(_message_tokens(item) for item in compacted) > history_budget and len(tail) > 2:
+        tail = tail[1:]
+        compacted = [{"role": "user", "content": summary}, *tail]
+
+    emit("diagnostic", {
+        "severity": "info",
+        "message": (
+            f"长会话已自动压缩：原历史约 {current_tokens} tokens，"
+            f"压缩后约 {sum(_message_tokens(item) for item in compacted)} tokens，"
+            f"模型上下文窗口 {context_window}。"
+        ),
+        "session_id": session_id,
+    })
+    return compacted
 
 
 def _make_agent_callbacks(session_id: str | None):
@@ -641,7 +798,11 @@ def main() -> int:
 
         user_message = _prepare_user_message(args.query, args.image_path)
         db_history = _load_session_history(session_db, args.session_id)
-        conversation_history = db_history or _load_conversation_history(args.history_file)
+        conversation_history = _compact_conversation_history(
+            db_history or _load_conversation_history(args.history_file),
+            user_message,
+            args.session_id,
+        )
         result = agent.run_conversation(
             user_message,
             conversation_history=conversation_history,

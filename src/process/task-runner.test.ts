@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { extractInlineImagePaths, mimeTypeForImagePath, resolveInlineFileAttachments, resolveInlineImageAttachments } from "./task-runner";
+import { extractInlineImagePaths, mimeTypeForImagePath, resolveHermesConversationIdForRuntime, resolveInlineFileAttachments, resolveInlineImageAttachments } from "./task-runner";
 import type { SessionAttachment } from "../shared/types";
 
 const tempDirs: string[] = [];
@@ -12,6 +12,27 @@ afterEach(async () => {
 });
 
 describe("task-runner inline image paths", () => {
+  it("keeps the existing Hermes session when the runtime model has not changed", () => {
+    const conversationId = resolveHermesConversationIdForRuntime({
+      workSessionId: "session-1",
+      workSession: { hermesSessionId: "hermes-session-1", model: "kimi-for-coding" },
+      runtimeEnv: { profileId: "kimi", provider: "custom", model: "kimi-for-coding", baseUrl: "https://api.kimi.com/coding/v1", sourceType: "kimi_coding_api_key" },
+    });
+
+    expect(conversationId).toBe("hermes-session-1");
+  });
+
+  it("uses a model-scoped Hermes session when the user switches model in the same chat", () => {
+    const conversationId = resolveHermesConversationIdForRuntime({
+      workSessionId: "session-1",
+      workSession: { hermesSessionId: "hermes-session-1", model: "mimo-v2.5-pro" },
+      runtimeEnv: { profileId: "kimi", provider: "custom", model: "kimi-for-coding", baseUrl: "https://api.kimi.com/coding/v1", sourceType: "kimi_coding_api_key" },
+    });
+
+    expect(conversationId).toMatch(/^session-1-model-[a-f0-9]{10}$/);
+    expect(conversationId).not.toBe("hermes-session-1");
+  });
+
   it("extracts quoted Windows image paths without treating plain text as attachments", () => {
     const paths = extractInlineImagePaths('请问"C:\\Users\\xia\\Desktop\\ScreenShot_2026-04-21_122543_618.png"是什么内容');
 

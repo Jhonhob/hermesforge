@@ -49,6 +49,22 @@ describe("HermesWebUiService", () => {
     ]);
   });
 
+  it("keeps profile switching and deletion in a valid active state", async () => {
+    const appPaths = new AppPaths(tempRoot);
+    await appPaths.ensureBaseLayout();
+    const service = new HermesWebUiService(appPaths, async () => path.join(tempRoot, "Hermes Agent"));
+
+    const created = await service.createProfile("wechat");
+    expect(created).toMatchObject({ id: "wechat", memoryFiles: 2 });
+    await service.switchProfile("wechat");
+
+    await expect(service.switchProfile("missing-agent")).rejects.toThrow("Agent 不存在");
+    const removed = await service.deleteProfile("wechat");
+
+    expect(removed.profiles.find((profile) => profile.id === "default")).toMatchObject({ active: true });
+    expect(removed.profiles.some((profile) => profile.id === "wechat")).toBe(false);
+  });
+
   it("normalizes native Hermes cron jobs from jobs.json", async () => {
     const appPaths = new AppPaths(tempRoot);
     await appPaths.ensureBaseLayout();

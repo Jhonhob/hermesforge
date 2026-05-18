@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTaskUsageState, trackTaskUsage } from "./task-usage-meter";
+import { estimateTextTokens } from "../shared/token-estimator";
 import type { EngineRuntimeEnv, RuntimeConfig } from "../shared/types";
 
 describe("task usage meter", () => {
@@ -76,5 +77,11 @@ describe("task usage meter", () => {
     expect(usage.inputTokens).toBe(120);
     expect(usage.outputTokens).toBe(80);
     expect(usage.estimatedCostUsd).toBe(0.0042);
+  });
+
+  it("uses the shared mixed Chinese and English token estimator", () => {
+    expect(estimateTextTokens("abcd")).toBe(1);
+    expect(estimateTextTokens("你好世界")).toBe(4);
+    expect(estimateTextTokens("hello 你好")).toBe(4);
   });
 });

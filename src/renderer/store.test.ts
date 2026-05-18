@@ -339,6 +339,92 @@ describe("renderer store task projections", () => {
     expect(projection.status).toBe("complete");
   });
 
+  it("rebuilds restored streamed runs from log events without duplicating persisted assistant text", () => {
+    const workSessionId = "session-restore";
+    const taskRunId = "task-stream-restore";
+    const events: TaskEventEnvelope[] = [
+      {
+        taskRunId,
+        workSessionId,
+        sessionId: taskRunId,
+        engineId: "hermes",
+        event: {
+          type: "message_chunk",
+          content: "第一段",
+          at: "2026-04-18T10:00:01.000Z",
+        },
+      },
+      {
+        taskRunId,
+        workSessionId,
+        sessionId: taskRunId,
+        engineId: "hermes",
+        event: {
+          type: "message_chunk",
+          content: "第二段",
+          at: "2026-04-18T10:00:02.000Z",
+        },
+      },
+      {
+        taskRunId,
+        workSessionId,
+        sessionId: taskRunId,
+        engineId: "hermes",
+        event: {
+          type: "result",
+          success: true,
+          title: "Hermes 回复",
+          detail: "第一段第二段",
+          at: "2026-04-18T10:00:03.000Z",
+        },
+      },
+    ];
+
+    useAppStore.setState({
+      taskRunOrderBySession: { [workSessionId]: [taskRunId] },
+      taskRunProjectionsById: {
+        [taskRunId]: {
+          taskRunId,
+          workSessionId,
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          toolEvents: [],
+          startedAt: "2026-04-18T10:00:00.000Z",
+          updatedAt: "2026-04-18T10:00:03.000Z",
+          userMessage: {
+            id: `user-${taskRunId}`,
+            sessionId: workSessionId,
+            taskId: taskRunId,
+            role: "user",
+            content: "原始问题",
+            createdAt: "2026-04-18T10:00:00.000Z",
+            visibleInChat: true,
+          },
+          assistantMessage: {
+            id: `agent-${taskRunId}`,
+            sessionId: workSessionId,
+            taskId: taskRunId,
+            role: "agent",
+            content: "第一段第二段",
+            status: "complete",
+            engineId: "hermes",
+            createdAt: "2026-04-18T10:00:01.000Z",
+            visibleInChat: true,
+          },
+        },
+      },
+    });
+
+    useAppStore.getState().rebuildSessionProjections(workSessionId, events);
+    useAppStore.getState().rebuildSessionProjections(workSessionId, events);
+
+    const projection = useAppStore.getState().taskRunProjectionsById[taskRunId];
+    expect(projection.userMessage?.content).toBe("原始问题");
+    expect(projection.assistantMessage.content).toBe("第一段第二段");
+    expect(useAppStore.getState().taskEventsByRunId[taskRunId]).toHaveLength(3);
+  });
+
   it("marks unfinished historical placeholder runs as interrupted", () => {
     useAppStore.setState({
       conversationMessages: [

@@ -228,10 +228,21 @@ function groupSessions(sessions: WorkSession[]) {
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
   const yesterdayKey = dateKey(yesterday);
+  const grouped = {
+    recent: [] as WorkSession[],
+    yesterday: [] as WorkSession[],
+    older: [] as WorkSession[],
+  };
+  for (const session of sessions) {
+    const key = dateKey(new Date(session.updatedAt));
+    if (key === todayKey) grouped.recent.push(session);
+    else if (key === yesterdayKey) grouped.yesterday.push(session);
+    else grouped.older.push(session);
+  }
   return [
-    { title: "最近", sessions: sessions.filter((session) => dateKey(new Date(session.updatedAt)) === todayKey) },
-    { title: "昨天", sessions: sessions.filter((session) => dateKey(new Date(session.updatedAt)) === yesterdayKey) },
-    { title: "更早", sessions: sessions.filter((session) => ![todayKey, yesterdayKey].includes(dateKey(new Date(session.updatedAt)))) },
+    { title: "最近", sessions: grouped.recent },
+    { title: "昨天", sessions: grouped.yesterday },
+    { title: "更早", sessions: grouped.older },
   ];
 }
 

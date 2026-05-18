@@ -227,6 +227,158 @@ describe("DashboardView", () => {
     expect(agentShell).toHaveStyle({ width: "360px" });
   });
 
+  it("renders long chats through a recent window and loads older runs on demand", () => {
+    const projections = Object.fromEntries(
+      Array.from({ length: 90 }, (_, index) => {
+        const id = `task-${index}`;
+        const at = new Date(Date.UTC(2026, 3, 18, 10, 0, index)).toISOString();
+        return [id, {
+          taskRunId: id,
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          toolEvents: [],
+          startedAt: at,
+          updatedAt: at,
+          userMessage: {
+            id: `u-${index}`,
+            sessionId: "session-1",
+            taskId: id,
+            role: "user",
+            content: `问题 ${index}`,
+            createdAt: at,
+            visibleInChat: true,
+          },
+          assistantMessage: {
+            id: `a-${index}`,
+            sessionId: "session-1",
+            taskId: id,
+            role: "agent",
+            content: `回答 ${index}`,
+            status: "complete",
+            actualEngine: "hermes",
+            createdAt: at,
+            visibleInChat: true,
+          },
+        }];
+      }),
+    );
+    useAppStore.setState({
+      taskRunProjectionsById: projections,
+      taskRunOrderBySession: { "session-1": Array.from({ length: 90 }, (_, index) => `task-${index}`) },
+    });
+
+    renderView();
+
+    expect(screen.getAllByTestId("chat-run")).toHaveLength(64);
+    expect(screen.queryByText("问题 0")).toBeNull();
+    expect(screen.getByText("问题 89")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("load-older-runs"));
+
+    expect(screen.getAllByTestId("chat-run")).toHaveLength(90);
+    expect(screen.getByText("问题 0")).toBeInTheDocument();
+  });
+
+  it("offers markdown export for very long assistant replies", () => {
+    useAppStore.setState({
+      taskRunProjectionsById: {
+        "task-long": {
+          taskRunId: "task-long",
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          toolEvents: [],
+          startedAt: "2026-04-18T10:00:00.000Z",
+          updatedAt: "2026-04-18T10:00:01.000Z",
+          userMessage: {
+            id: "u-long",
+            sessionId: "session-1",
+            taskId: "task-long",
+            role: "user",
+            content: "整理这次更新",
+            createdAt: "2026-04-18T10:00:00.000Z",
+            visibleInChat: true,
+          },
+          assistantMessage: {
+            id: "a-long",
+            sessionId: "session-1",
+            taskId: "task-long",
+            role: "agent",
+            content: `长回复\n\n${"内容".repeat(7000)}`,
+            status: "complete",
+            actualEngine: "hermes",
+            authorName: "Hermes",
+            createdAt: "2026-04-18T10:00:01.000Z",
+            visibleInChat: true,
+          },
+        },
+      },
+      taskRunOrderBySession: { "session-1": ["task-long"] },
+    });
+
+    renderView();
+
+    expect(screen.getByText("这条回复较长，建议导出为 Markdown 文件保存或转发。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导出 Markdown" })).toBeInTheDocument();
+  });
+
+  it("floats the scroll-to-bottom action above the composer without adding a layout row", async () => {
+    useAppStore.setState({
+      taskRunProjectionsById: {
+        "task-1": {
+          taskRunId: "task-1",
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          toolEvents: [],
+          startedAt: "2026-04-18T10:00:00.000Z",
+          updatedAt: "2026-04-18T10:00:01.000Z",
+          userMessage: {
+            id: "u1",
+            sessionId: "session-1",
+            taskId: "task-1",
+            role: "user",
+            content: "你好",
+            createdAt: "2026-04-18T10:00:00.000Z",
+            visibleInChat: true,
+          },
+          assistantMessage: {
+            id: "a1",
+            sessionId: "session-1",
+            taskId: "task-1",
+            role: "agent",
+            content: "我可以帮你分析项目。",
+            status: "complete",
+            actualEngine: "hermes",
+            authorName: "Hermes",
+            createdAt: "2026-04-18T10:00:01.000Z",
+            visibleInChat: true,
+          },
+        },
+      },
+      taskRunOrderBySession: { "session-1": ["task-1"] },
+    });
+
+    const { container } = renderView();
+    const scrollArea = container.querySelector(".hermes-chat-scroll") as HTMLElement;
+    expect(scrollArea).toBeTruthy();
+    Object.defineProperty(scrollArea, "scrollHeight", { configurable: true, value: 1200 });
+    Object.defineProperty(scrollArea, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(scrollArea, "scrollTop", { configurable: true, value: 200 });
+
+    fireEvent.scroll(scrollArea);
+
+    const overlay = await screen.findByTestId("scroll-to-bottom-overlay");
+    expect(overlay).toHaveClass("absolute");
+    expect(overlay).toHaveClass("pointer-events-none");
+    await waitFor(() => expect(overlay).toHaveStyle({ bottom: "168px" }));
+    expect(screen.getByRole("button", { name: "回到底部" })).toHaveClass("pointer-events-auto");
+  });
+
   it("keeps secondary header actions folded until the menu is opened", () => {
     renderView();
     const banner = screen.getByRole("banner");
@@ -473,10 +625,10 @@ describe("DashboardView", () => {
 
     expect(input).toHaveAttribute("placeholder", "写给 Hermes… (/ 命令，拖拽或粘贴附件)");
     expect(sendButton).not.toBeDisabled();
-    expect(sendButton).toHaveClass("h-9");
+    expect(sendButton).toHaveClass("h-8");
     expect(sendButton).toHaveClass("bg-[var(--hermes-primary)]");
-    expect(attachmentButton).toHaveClass("h-9");
-    expect(modelButton).toHaveClass("h-9");
+    expect(attachmentButton).toHaveClass("h-8");
+    expect(modelButton).toHaveClass("h-8");
     expect(modelButton).toHaveClass("max-w-[176px]");
     expect(modelButton).toHaveClass("bg-[var(--hermes-primary-soft)]");
     expect(modelButton).toHaveAttribute("title", "qwen");
@@ -492,12 +644,12 @@ describe("DashboardView", () => {
 
     const input = screen.getByLabelText("给 Hermes 发送消息");
     const sendButton = screen.getByRole("button", { name: "发送" });
-    const summary = screen.getByText(/可发送 · 命令自动放行/);
-    const helper = summary.parentElement?.parentElement?.parentElement;
+    const summary = screen.getAllByText(/可发送 · 命令自动放行/)[0];
+    const helper = summary.closest("summary");
 
     expect(sendButton).not.toBeDisabled();
-    expect(helper).toHaveClass("text-[10px]");
-    expect(helper).not.toHaveClass("border");
+    expect(helper).toHaveClass("hermes-composer-status");
+    expect(helper).toHaveClass("border");
     expect(screen.getByText("运行说明")).toBeInTheDocument();
 
     fireEvent.change(input, { target: { value: "帮我检查项目结构" } });
@@ -698,13 +850,15 @@ describe("DashboardView", () => {
       />,
     );
 
-    const contextButton = screen.getByLabelText(/实测已用上下文/);
-    expect(contextButton).toHaveTextContent(/实测上下文 420/);
-    expect(contextButton).toHaveTextContent(/42%/);
+    const contextButton = screen.getByLabelText(/实测当前上下文占用/);
+    expect(contextButton).toHaveTextContent(/实测上下文 509/);
+    expect(contextButton).toHaveTextContent(/51%/);
 
     fireEvent.click(contextButton);
 
     expect(screen.getByText("真实上下文")).toBeInTheDocument();
+    expect(screen.getByText("509 tokens")).toBeInTheDocument();
+    expect(screen.getByText("491 tokens")).toBeInTheDocument();
     expect(screen.getByText("420 tokens")).toBeInTheDocument();
     expect(screen.getByText("80 tokens")).toBeInTheDocument();
   });

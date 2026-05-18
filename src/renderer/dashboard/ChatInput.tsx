@@ -2,7 +2,9 @@ import { Command, DownloadCloud, Gauge, Mic, MicOff, Paperclip, Plus, Send, Squa
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClipboardEvent, DragEvent, ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { EngineEvent, EngineUpdateStatus, ModelProfile, SessionAgentInsightUsage } from "../../shared/types";
+import { estimateTextTokens } from "../../shared/token-estimator";
 import { useAppStore } from "../store";
 import { cn } from "./DashboardPrimitives";
 import { buildPreflightState, preflightChipsForUser, preflightDetailForUser, preflightSummaryForUser } from "./permissionModel";
@@ -23,7 +25,39 @@ export function ChatInput(props: {
   latestSnapshotAvailable: boolean;
   locked: boolean;
 }) {
-  const store = useAppStore();
+  const store = useAppStore(useShallow((state) => ({
+    activeSessionId: state.activeSessionId,
+    addAttachments: state.addAttachments,
+    attachments: state.attachments,
+    conversationMessages: state.conversationMessages,
+    error: state.error,
+    events: state.events,
+    hermesStatus: state.hermesStatus,
+    info: state.info,
+    permissionOverview: state.permissionOverview,
+    providerProfiles: state.providerProfiles,
+    pushEvent: state.pushEvent,
+    pushSessionMessage: state.pushSessionMessage,
+    removeAttachment: state.removeAttachment,
+    runningTaskRunId: state.runningTaskRunId,
+    runtimeConfig: state.runtimeConfig,
+    selectedFiles: state.selectedFiles,
+    sessionAgentInsight: state.sessionAgentInsight,
+    sessionFilesPath: state.sessionFilesPath,
+    setRuntimeConfig: state.setRuntimeConfig,
+    setUserInput: state.setUserInput,
+    setWebUiOverview: state.setWebUiOverview,
+    setWorkspacePath: state.setWorkspacePath,
+    success: state.success,
+    taskEventsByRunId: state.taskEventsByRunId,
+    taskRunOrderBySession: state.taskRunOrderBySession,
+    taskRunProjectionsById: state.taskRunProjectionsById,
+    upsertClarifyCard: state.upsertClarifyCard,
+    userInput: state.userInput,
+    warning: state.warning,
+    webUiOverview: state.webUiOverview,
+    workspacePath: state.workspacePath,
+  })));
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const submittingRef = useRef(false);
   const plusMenuRef = useRef<HTMLDivElement | null>(null);
@@ -395,7 +429,14 @@ export function ChatInput(props: {
       return;
     }
     try {
-      const nextConfig = { ...store.runtimeConfig, defaultModelProfileId: profileId };
+      const nextConfig = {
+        ...store.runtimeConfig,
+        defaultModelProfileId: profileId,
+        modelRoleAssignments: {
+          ...(store.runtimeConfig.modelRoleAssignments ?? {}),
+          chat: profileId,
+        },
+      };
       const saved = await window.workbenchClient.saveRuntimeConfig(nextConfig);
       store.setRuntimeConfig(saved);
       store.success("模型已切换", `当前使用：${target.name ?? target.model}`);
@@ -516,7 +557,14 @@ export function ChatInput(props: {
           store.setUserInput("");
           return;
         }
-        const updatedConfig = { ...store.runtimeConfig, defaultModelProfileId: matchedProfile.id };
+        const updatedConfig = {
+          ...store.runtimeConfig,
+          defaultModelProfileId: matchedProfile.id,
+          modelRoleAssignments: {
+            ...(store.runtimeConfig.modelRoleAssignments ?? {}),
+            chat: matchedProfile.id,
+          },
+        };
         void window.workbenchClient.saveRuntimeConfig(updatedConfig).then((config) => {
           store.setRuntimeConfig(config);
           store.success("模型已切换", `当前使用：${matchedProfile.name ?? matchedProfile.id}`);
@@ -573,7 +621,7 @@ export function ChatInput(props: {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1120px] px-4 pb-5 pt-4 2xl:max-w-[1240px]" data-testid="chat-input-shell">
+    <div className="mx-auto w-full max-w-[1120px] px-4 pb-4 pt-3 2xl:max-w-[1240px]" data-testid="chat-input-shell">
       <div className="relative">
         {commands.length ? (
           <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-full overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
@@ -598,7 +646,7 @@ export function ChatInput(props: {
         ) : null}
         <div
           className={cn(
-            "hermes-composer-card relative overflow-visible rounded-[28px] border border-white/80 bg-white shadow-[0_10px_34px_rgba(15,23,42,0.045)] ring-1 ring-slate-900/[0.03] focus-within:hermes-purple-focus",
+            "hermes-composer-card relative overflow-visible rounded-[24px] border border-slate-200/70 bg-[#f6f7f9] shadow-none transition focus-within:border-[var(--hermes-primary-border)] focus-within:bg-[#f8f8ff] focus-within:shadow-[0_0_0_3px_rgba(91,77,255,0.055)]",
             isDraggingAttachment && "ring-2 ring-[var(--hermes-primary-border)]",
           )}
           onDragEnter={handleAttachmentDragEnter}
@@ -647,15 +695,15 @@ export function ChatInput(props: {
                 handleSubmit();
               }
             }}
-            className="max-h-[24vh] min-h-[46px] w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400"
+            className="max-h-[24vh] min-h-[54px] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-[15px] leading-6 text-slate-800 outline-none placeholder:text-slate-400"
             placeholder="写给 Hermes… (/ 命令，拖拽或粘贴附件)"
           />
 
-          <div className="flex items-center justify-between gap-2.5 px-3.5 pb-2.5 pt-0">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex items-center justify-between gap-2 border-t border-slate-100/80 px-3 pb-2.5 pt-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <div className="relative" ref={plusMenuRef}>
                 <button
-                  className="grid h-9 w-9 place-items-center rounded-full border border-[var(--hermes-primary-border)] text-[var(--hermes-primary)] transition hover:bg-[var(--hermes-primary-soft)]"
+                  className="grid h-8 w-8 place-items-center rounded-full border border-[var(--hermes-primary-border)] text-[var(--hermes-primary)] transition hover:bg-[var(--hermes-primary-soft)]"
                   onClick={() => {
                     if (isListening) {
                       stopVoiceInput();
@@ -681,7 +729,7 @@ export function ChatInput(props: {
               </div>
 
               <button
-                className="grid h-9 w-9 place-items-center rounded-full border border-[var(--hermes-primary-border)] text-[var(--hermes-primary)] transition hover:bg-[var(--hermes-primary-soft)]"
+                className="grid h-8 w-8 place-items-center rounded-full border border-[var(--hermes-primary-border)] text-[var(--hermes-primary)] transition hover:bg-[var(--hermes-primary-soft)]"
                 onClick={() => void pickAttachments()}
                 aria-label="添加附件"
                 title="添加附件"
@@ -693,7 +741,7 @@ export function ChatInput(props: {
 
               <div className="relative" ref={modelMenuRef}>
                 <button
-                  className="inline-flex h-9 max-w-[176px] items-center rounded-full border border-[var(--hermes-primary-border)] bg-[var(--hermes-primary-soft)] px-3 text-[12px] font-medium text-[var(--hermes-primary)] transition hover:bg-white"
+                  className="inline-flex h-8 max-w-[176px] items-center rounded-full border border-[var(--hermes-primary-border)] bg-[var(--hermes-primary-soft)] px-3 text-[12px] font-medium text-[var(--hermes-primary)] transition hover:bg-white max-sm:max-w-[128px]"
                   onClick={() => setModelMenuOpen((value) => !value)}
                   title={currentModelLabel}
                   type="button"
@@ -738,11 +786,19 @@ export function ChatInput(props: {
               </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+              <PreflightStrip
+                preflight={preflight}
+                onOpenFix={props.onOpenFix}
+                sendBlockTarget={props.sendBlockTarget}
+                attachmentText={store.attachments.length ? `${store.attachments.length} 个附件` : "仅关键信息"}
+                statusText={statusText}
+                statusTone={statusTone}
+              />
               <ContextMeterPill meter={contextMeter} />
               {store.runningTaskRunId ? (
                 <button
-                  className="grid h-9 w-9 place-items-center rounded-full border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100"
+                  className="grid h-8 w-8 place-items-center rounded-full border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100"
                   onClick={props.onCancelTask}
                   aria-label="停止 Hermes"
                   type="button"
@@ -751,7 +807,7 @@ export function ChatInput(props: {
                 </button>
               ) : (
                 <button
-                  className="grid h-9 w-9 place-items-center rounded-full bg-[var(--hermes-primary)] text-white shadow-[0_10px_24px_rgba(91,77,255,0.24)] transition hover:bg-[var(--hermes-primary-strong)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                  className="grid h-8 w-8 place-items-center rounded-full bg-[var(--hermes-primary)] text-white shadow-[0_10px_24px_rgba(91,77,255,0.24)] transition hover:bg-[var(--hermes-primary-strong)] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                   aria-label="发送"
                   title={props.sendBlockReason ?? "发送"}
                   onClick={handleSubmit}
@@ -763,29 +819,6 @@ export function ChatInput(props: {
               )}
             </div>
           </div>
-        </div>
-
-        <div className="mt-1.5 flex items-start justify-between gap-3 px-1 text-[10px] leading-4">
-          <button
-            className={cn(
-              "min-w-0 shrink truncate text-left transition",
-              statusTone === "ready" && "text-slate-400",
-              statusTone === "blocked" && "text-slate-400",
-              statusTone === "action" && "text-slate-500 underline decoration-slate-300 underline-offset-4",
-            )}
-            disabled={!props.sendBlockTarget}
-            onClick={() => props.sendBlockTarget && props.onOpenFix?.(props.sendBlockTarget)}
-            type="button"
-          >
-            {statusText}
-            {props.sendBlockTarget ? " · 点击修复" : ""}
-          </button>
-          <PreflightStrip
-            preflight={preflight}
-            onOpenFix={props.onOpenFix}
-            sendBlockTarget={props.sendBlockTarget}
-            attachmentText={store.attachments.length ? `${store.attachments.length} 个附件 · 文件内容另计` : "仅显示关键信息"}
-          />
         </div>
 
         {store.attachments.length > 0 ? (
@@ -854,14 +887,17 @@ function HermesUpdateBanner(props: { update: EngineUpdateStatus; onOpenSettings?
 }
 
 type ContextMeter = {
-  displayTokens: number;
+  usedTokens: number;
   draftTokens: number;
   contextWindow?: number;
+  remainingTokens?: number;
   percent?: number;
   tone: "slate" | "emerald" | "amber" | "rose";
   attachmentCount: number;
-  source: "actual" | "estimated" | "draft";
+  source: "actual" | "estimated";
+  inputTokens?: number;
   outputTokens?: number;
+  baseTokens?: number;
   measuredAt?: string;
 };
 
@@ -871,22 +907,25 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [panelPosition, setPanelPosition] = useState({ right: 16, bottom: 120, width: 264 });
-  const sourceLabel = meter.source === "actual" ? "实测" : meter.source === "estimated" ? "估算" : "草稿约";
-  const compactSourceLabel = meter.source === "actual" ? "实测上下文" : meter.source === "estimated" ? "估算上下文" : "草稿上下文";
+  const sourceLabel = meter.source === "actual" ? "实测" : "估算";
+  const compactSourceLabel = meter.source === "actual" ? "实测上下文" : "估算上下文";
   const percentLabel = typeof meter.percent === "number"
-    ? meter.percent === 0 && meter.displayTokens > 0
+    ? meter.percent === 0 && meter.usedTokens > 0
       ? "<1%"
       : `${meter.percent}%`
     : undefined;
   const showCompactPercent = typeof meter.percent === "number" && meter.percent >= 1;
   const visualPercent = typeof meter.percent === "number"
-    ? Math.max(meter.percent, meter.displayTokens > 0 ? 2 : 0)
+    ? Math.max(meter.percent, meter.usedTokens > 0 ? 2 : 0)
     : undefined;
-  const displayTokenLabel = formatExactTokenCount(meter.displayTokens);
+  const displayTokenLabel = formatExactTokenCount(meter.usedTokens);
   const contextWindowLabel = meter.contextWindow ? `${formatExactTokenCount(meter.contextWindow)} tokens` : "未知";
+  const remainingLabel = typeof meter.remainingTokens === "number"
+    ? `${formatExactTokenCount(Math.max(0, meter.remainingTokens))} tokens`
+    : "未知";
   const title = meter.contextWindow
-    ? `${sourceLabel}已用上下文：${displayTokenLabel} input tokens；模型窗口上限：${contextWindowLabel}${percentLabel ? `；占用 ${percentLabel}` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`
-    : `${sourceLabel}已用上下文：${displayTokenLabel} input tokens${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`;
+    ? `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens；剩余：${remainingLabel}；模型窗口上限：${contextWindowLabel}${percentLabel ? `；占用 ${percentLabel}` : ""}${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`
+    : `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`;
   const meterClass = meter.tone === "rose"
     ? "border-rose-200/80 bg-rose-50/80 text-rose-700 shadow-rose-100/80"
     : meter.tone === "amber"
@@ -951,19 +990,21 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[13px] font-semibold text-slate-950">{meter.source === "actual" ? "真实上下文" : "等待真实上下文"}</p>
-              <p className="mt-0.5 text-[11px] text-slate-400">{meter.source === "actual" ? "来自 Hermes usage 的 input tokens" : "发送完成后会替换为 Hermes 实测值"}</p>
+              <p className="mt-0.5 text-[11px] text-slate-400">{meter.source === "actual" ? "来自 Hermes usage，并叠加当前草稿" : "发送完成后会替换为 Hermes 实测值"}</p>
             </div>
             <span className={cn("rounded-full px-2 py-1 text-[10px] font-semibold", meter.source === "actual" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>
               {sourceLabel}
             </span>
           </div>
           <div className="mt-3 space-y-1.5">
-            <ContextDetailRow label={meter.source === "actual" ? "实测输入上下文" : "当前输入上下文"} value={`${displayTokenLabel} tokens`} />
+            <ContextDetailRow label="当前占用" value={`${displayTokenLabel} tokens`} />
+            <ContextDetailRow label="剩余窗口" value={remainingLabel} />
+            {typeof meter.inputTokens === "number" ? <ContextDetailRow label="最近输入" value={`${meter.inputTokens.toLocaleString()} tokens`} /> : null}
             {typeof meter.outputTokens === "number" ? <ContextDetailRow label="最近输出" value={`${meter.outputTokens.toLocaleString()} tokens`} /> : null}
             <ContextDetailRow label="当前草稿" value={`约 +${meter.draftTokens.toLocaleString()} tokens`} />
             <ContextDetailRow label="模型窗口上限" value={contextWindowLabel} />
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-slate-400">窗口上限来自模型配置或服务返回，只用来判断余量；主数值显示当前对话真实/估算已用上下文。</p>
+          <p className="mt-2 text-[11px] leading-5 text-slate-400">当前占用按 Hermes 最近一次 usage 的输入+输出计算，并叠加输入框草稿；缺少 usage 时使用本地估算。</p>
           {typeof meter.percent === "number" ? (
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
@@ -1000,6 +1041,7 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
         </span>
         <span className="min-w-0 truncate">
           {compactSourceLabel} {displayTokenLabel}
+          {meter.contextWindow ? `/${formatExactTokenCount(meter.contextWindow)}` : ""}
           {showCompactPercent && percentLabel ? ` · ${percentLabel}` : ""}
         </span>
         {typeof meter.percent === "number" ? (
@@ -1027,12 +1069,9 @@ function PreflightStrip(props: {
   onOpenFix?: (target: FixTarget) => void;
   sendBlockTarget?: FixTarget;
   attachmentText: string;
+  statusText: string;
+  statusTone: "ready" | "blocked" | "action";
 }) {
-  const toneClass = props.preflight.tone === "green"
-    ? "text-slate-400"
-    : props.preflight.tone === "yellow"
-      ? "text-slate-400"
-      : "text-rose-600";
   const dotClass = props.preflight.tone === "green"
     ? "bg-emerald-400"
     : props.preflight.tone === "yellow"
@@ -1059,59 +1098,84 @@ function PreflightStrip(props: {
   }
 
   const fixTarget = inferFixTarget();
+  const actionTarget = props.sendBlockTarget ?? fixTarget;
+  const needsDetails = Boolean(props.preflight.block) || props.preflight.tone === "yellow";
+  const label = props.statusTone === "action"
+    ? `${props.statusText} · 点击修复`
+    : props.statusTone === "blocked"
+      ? props.statusText
+      : props.preflight.tone === "green"
+        ? "环境就绪"
+        : displaySummary;
+  const pillClass = cn(
+    "hermes-composer-status inline-flex h-8 max-w-[190px] items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] font-semibold transition max-sm:max-w-[112px]",
+    props.statusTone === "action" || props.preflight.tone === "red"
+      ? "border-rose-100 bg-rose-50/80 text-rose-700 hover:bg-rose-50"
+      : props.preflight.tone === "yellow" || props.statusTone === "blocked"
+        ? "border-amber-100 bg-amber-50/70 text-amber-700 hover:bg-amber-50"
+        : "border-slate-200/70 bg-white/60 text-slate-400 hover:bg-white hover:text-slate-600",
+  );
+  const summaryContent = (
+    <>
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_0_2px_rgba(148,163,184,0.10)]", dotClass)} />
+      <span className="min-w-0 truncate">{label}</span>
+      {needsDetails && props.statusTone !== "action" ? <span className="hidden shrink-0 text-[10px] font-medium opacity-70 sm:inline">运行说明</span> : null}
+    </>
+  );
+
+  if (needsDetails && props.statusTone !== "action") {
+    return (
+      <details className="group relative min-w-0 shrink">
+        <summary className={cn(pillClass, "cursor-pointer list-none outline-none focus-visible:ring-2 focus-visible:ring-slate-200")}>
+          {summaryContent}
+        </summary>
+        <div className="absolute bottom-[calc(100%+10px)] right-0 z-30 w-[min(360px,calc(100vw-32px))] rounded-2xl border border-slate-200/80 bg-white p-3 text-left text-[11px] leading-5 text-slate-600 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-slate-900">{displaySummary}</span>
+            <span className="shrink-0 rounded-full bg-slate-50 px-2 py-0.5 text-[10px] text-slate-400">{props.attachmentText}</span>
+          </div>
+          <p className={cn("mt-2", props.preflight.block ? "text-rose-700" : "text-slate-500")}>{detail}</p>
+          {chips.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {chips.map((chip) => (
+                <span key={chip} className={cn("rounded-full bg-slate-50 px-2 py-1 text-[10px] font-medium", chipClass)}>
+                  {chip}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {props.preflight.block ? (
+            <div className="mt-2 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-rose-700">
+              <span className="min-w-0">{props.preflight.block.fixHint}</span>
+              {fixTarget ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    props.onOpenFix?.(fixTarget);
+                  }}
+                  className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200 hover:bg-rose-50"
+                >
+                  去修复
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </details>
+    );
+  }
 
   return (
-    <div className={cn("min-w-0 max-w-[60%] text-right text-[10px] leading-4", toneClass)}>
-      <div className="flex flex-wrap items-center justify-end gap-x-1.5 gap-y-1">
-        <span className="shrink-0 text-slate-300">{props.attachmentText}</span>
-        <span className="text-slate-300">·</span>
-        <span className="inline-flex min-w-0 items-center gap-1.5 font-semibold">
-          <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full shadow-[0_0_0_2px_rgba(148,163,184,0.10)]", dotClass)} />
-          <span className="truncate">{displaySummary}</span>
-        </span>
-        {chips.map((chip) => (
-          <span
-            key={chip}
-            className={cn("hidden rounded-full font-medium sm:inline", chipClass)}
-          >
-            {chip}
-          </span>
-        ))}
-      </div>
-      {props.preflight.block ? (
-        <details className="group mt-0.5">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-0.5 font-medium text-rose-500 outline-none transition hover:bg-rose-50 focus-visible:ring-2 focus-visible:ring-rose-200">
-            <span>为什么会这样 / 怎么修</span>
-            <span className="opacity-55 transition-opacity group-hover:opacity-100">展开</span>
-          </summary>
-          <div className="ml-auto mt-1 max-w-xl space-y-1 rounded-xl bg-white/80 px-3 py-2 text-left text-[11px] leading-5 text-rose-700 ring-1 ring-rose-100">
-            <p className="leading-5">{detail}</p>
-            <p className="font-medium">{props.preflight.block.fixHint}</p>
-            {fixTarget ? (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  props.onOpenFix?.(fixTarget);
-                }}
-                className="mt-1 inline-flex items-center gap-1 rounded-md bg-white/80 px-2 py-1 text-[11px] font-semibold text-rose-700 shadow-sm ring-1 ring-rose-200 transition hover:bg-white"
-              >
-                去修复 →
-              </button>
-            ) : null}
-          </div>
-        </details>
-      ) : props.preflight.tone === "yellow" ? (
-        <details className="group mt-0.5">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-0.5 text-[10px] font-medium text-slate-300 outline-none transition hover:bg-slate-50 hover:text-slate-500 focus-visible:ring-2 focus-visible:ring-slate-200">
-            <span>运行说明</span>
-            <span className="opacity-60 transition-opacity group-open:rotate-180 group-hover:opacity-100">⌄</span>
-          </summary>
-          <p className="ml-auto mt-1 max-w-xl rounded-xl bg-white/80 px-3 py-2 text-left text-[11px] leading-5 text-slate-500 ring-1 ring-slate-100">{detail}</p>
-        </details>
-      ) : null}
-    </div>
+    <button
+      className={pillClass}
+      disabled={!actionTarget}
+      onClick={() => actionTarget && props.onOpenFix?.(actionTarget)}
+      title={`${label} · ${props.attachmentText}`}
+      type="button"
+    >
+      {summaryContent}
+    </button>
   );
 }
 
@@ -1132,10 +1196,18 @@ function buildContextMeter(input: {
   const attachmentOverhead = input.attachmentCount * 48;
   const draftTokens = Math.max(0, estimateTokens(input.userInput) + attachmentOverhead);
   const fallbackTokens = Math.max(0, estimateTokens(`${historyText}\n${input.userInput}`) + attachmentOverhead);
-  const displayTokens = latestUsage?.inputTokens ?? fallbackTokens;
-  const source = latestUsage?.source ?? "draft";
+  const actualBaseTokens = latestUsage
+    ? Math.max(latestUsage.totalTokens ?? 0, latestUsage.inputTokens + latestUsage.outputTokens)
+    : undefined;
+  const usedTokens = actualBaseTokens !== undefined
+    ? Math.max(0, actualBaseTokens + draftTokens)
+    : fallbackTokens;
+  const source = latestUsage?.source ?? "estimated";
+  const remainingTokens = input.contextWindow && input.contextWindow > 0
+    ? input.contextWindow - usedTokens
+    : undefined;
   const percent = input.contextWindow && input.contextWindow > 0
-    ? Math.min(100, Math.round((displayTokens / input.contextWindow) * 100))
+    ? Math.min(100, Math.round((usedTokens / input.contextWindow) * 100))
     : undefined;
   const tone = typeof percent !== "number"
     ? "slate"
@@ -1147,20 +1219,23 @@ function buildContextMeter(input: {
           ? "emerald"
           : "slate";
   return {
-    displayTokens,
+    usedTokens,
     draftTokens,
     contextWindow: input.contextWindow,
+    remainingTokens,
     percent,
     tone,
     attachmentCount: input.attachmentCount,
     source,
+    inputTokens: latestUsage?.inputTokens,
     outputTokens: latestUsage?.outputTokens,
+    baseTokens: actualBaseTokens,
     measuredAt: latestUsage?.at,
   };
 }
 
 function resolveComposerContextWindow(
-  store: ReturnType<typeof useAppStore.getState>,
+  store: Pick<ReturnType<typeof useAppStore.getState>, "providerProfiles" | "runtimeConfig" | "sessionAgentInsight">,
   modelProfile: ModelProfile | undefined,
   modelLabel: string,
 ) {
@@ -1176,7 +1251,7 @@ function latestUsageForSession(
   activeSessionId: string | undefined,
   eventsByRunId: ReturnType<typeof useAppStore.getState>["taskEventsByRunId"],
   insightUsage?: SessionAgentInsightUsage,
-): { inputTokens: number; outputTokens: number; source: "actual" | "estimated"; at?: string } | undefined {
+): { inputTokens: number; outputTokens: number; totalTokens?: number; source: "actual" | "estimated"; at?: string } | undefined {
   const usageEvents = Object.values(eventsByRunId)
     .flat()
     .filter((event) => (!activeSessionId || event.workSessionId === activeSessionId) && event.event.type === "usage")
@@ -1187,6 +1262,7 @@ function latestUsageForSession(
     return {
       inputTokens: preferred.inputTokens,
       outputTokens: preferred.outputTokens,
+      totalTokens: preferred.totalTokens,
       source: preferred.source === "actual" ? "actual" : "estimated",
       at: preferred.at,
     };
@@ -1195,6 +1271,7 @@ function latestUsageForSession(
   return {
     inputTokens: insightUsage.latestInputTokens,
     outputTokens: insightUsage.latestOutputTokens,
+    totalTokens: insightUsage.latestInputTokens + insightUsage.latestOutputTokens,
     source: insightUsage.source === "actual" ? "actual" : "estimated",
   };
 }
@@ -1208,16 +1285,26 @@ function contextTextFromProjections(
   projections: ReturnType<typeof useAppStore.getState>["taskRunProjectionsById"],
   runOrder: ReturnType<typeof useAppStore.getState>["taskRunOrderBySession"],
 ) {
+  const maxPreviewCharacters = 120_000;
+  const maxPreviewRuns = 48;
   const projectionList = activeSessionId && runOrder[activeSessionId]?.length
-    ? runOrder[activeSessionId].map((id) => projections[id]).filter(Boolean)
-    : Object.values(projections).filter((projection) => !activeSessionId || projection.workSessionId === activeSessionId);
-  return projectionList
-    .map((projection) => [
+    ? runOrder[activeSessionId].slice(-maxPreviewRuns).map((id) => projections[id]).filter(Boolean)
+    : Object.values(projections).filter((projection) => !activeSessionId || projection.workSessionId === activeSessionId).slice(-maxPreviewRuns);
+  const chunks: string[] = [];
+  let usedCharacters = 0;
+  for (const projection of projectionList) {
+    const text = [
       projection.userMessage?.content,
       projection.assistantMessage.content,
       ...projection.toolEvents.map((tool) => tool.summary ?? tool.command ?? tool.path ?? ""),
-    ].filter(Boolean).join("\n"))
-    .join("\n");
+    ].filter(Boolean).join("\n");
+    if (!text) continue;
+    const remaining = maxPreviewCharacters - usedCharacters;
+    if (remaining <= 0) break;
+    chunks.push(text.length > remaining ? text.slice(0, remaining) : text);
+    usedCharacters += Math.min(text.length, remaining);
+  }
+  return chunks.join("\n");
 }
 
 function contextTextFromMessages(
@@ -1232,14 +1319,7 @@ function contextTextFromMessages(
 }
 
 function estimateTokens(text: string) {
-  let ascii = 0;
-  let nonAscii = 0;
-  for (const char of text) {
-    if (/\s/.test(char)) continue;
-    if (char.charCodeAt(0) <= 0x7f) ascii += 1;
-    else nonAscii += 1;
-  }
-  return Math.ceil(ascii / 4 + nonAscii * 0.9);
+  return estimateTextTokens(text);
 }
 
 function formatExactTokenCount(value: number) {

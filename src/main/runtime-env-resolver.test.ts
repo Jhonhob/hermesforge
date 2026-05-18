@@ -61,6 +61,35 @@ describe("RuntimeEnvResolver", () => {
     });
   });
 
+  it("carries the selected model context window into the runtime environment", async () => {
+    const config: RuntimeConfig = {
+      defaultModelProfileId: "kimi-main",
+      modelProfiles: [{
+        id: "kimi-main",
+        provider: "custom",
+        baseUrl: "https://api.kimi.com/coding/v1",
+        model: "kimi-for-coding",
+        maxTokens: 256000,
+      }],
+      providerProfiles: [{
+        id: "kimi-provider",
+        provider: "custom",
+        label: "Kimi",
+        status: "ready",
+        models: [{ id: "kimi-for-coding", label: "kimi-for-coding", contextWindow: 256000 }],
+      }],
+      updateSources: {},
+    };
+    const resolver = new RuntimeEnvResolver(
+      { read: async () => config } as never,
+      { readSecret: async () => undefined } as never,
+    );
+
+    const runtime = await resolver.resolve();
+
+    expect(runtime.contextWindow).toBe(256000);
+  });
+
   it("lets the runtime proxy rewrite short-key local endpoints before Hermes sees them", async () => {
     const config: RuntimeConfig = {
       defaultModelProfileId: "local-openai",

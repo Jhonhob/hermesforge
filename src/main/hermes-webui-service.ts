@@ -407,7 +407,7 @@ export class HermesWebUiService {
 
   async listProfiles(): Promise<HermesProfile[]> {
     const base = await this.baseHermesHome();
-    const active = (await fs.readFile(path.join(base, "active_profile"), "utf8").catch(() => "")).trim() || "default";
+    const active = await this.activeProfileName(base);
     const profileRoot = path.join(base, "profiles");
     const entries = await fs.readdir(profileRoot, { withFileTypes: true }).catch(() => []);
     const names = ["default", ...entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)];
@@ -432,8 +432,10 @@ export class HermesWebUiService {
   }
 
   async switchProfile(name: string) {
-    await fs.writeFile(path.join(await this.baseHermesHome(), "active_profile"), name === "default" ? "" : name, "utf8");
-    return { ok: true, active: name, profiles: await this.listProfiles() };
+    const base = await this.baseHermesHome();
+    const safe = await this.resolveProfileName(base, name);
+    await fs.writeFile(path.join(base, "active_profile"), safe === "default" ? "" : safe, "utf8");
+    return { ok: true, active: safe, profiles: await this.listProfiles() };
   }
 
   async createProfile(name: string) {
@@ -444,18 +446,28 @@ export class HermesWebUiService {
     
     const safe = name.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
     if (!safe) throw new Error("Profile 名称不能为空。");
+    if (safe === "default") throw new Error("default Agent 已存在。");
     const profilePath = path.join(await this.baseHermesHome(), "profiles", safe);
     await fs.mkdir(path.join(profilePath, "skills"), { recursive: true });
     await fs.mkdir(path.join(profilePath, "memories"), { recursive: true });
     await fs.mkdir(path.join(profilePath, "cron"), { recursive: true });
+    await fs.writeFile(path.join(profilePath, "memories", "USER.md"), "# USER\n\n", { flag: "a" });
+    await fs.writeFile(path.join(profilePath, "memories", "MEMORY.md"), "# MEMORY\n\n", { flag: "a" });
     return (await this.listProfiles()).find((item) => item.id === safe);
   }
 
   async deleteProfile(name: string) {
     if (name === "default") throw new Error("不能删除 default profile。");
-    const profilePath = await this.resolveUnder(path.join(await this.baseHermesHome(), "profiles"), name);
+    const base = await this.baseHermesHome();
+    const safe = await this.resolveProfileName(base, name);
+    if (safe === "default") throw new Error("不能删除 default profile。");
+    const profilePath = await this.resolveUnder(path.join(base, "profiles"), safe);
+    const wasActive = await this.activeProfileName(base) === safe;
     await this.moveToTrash(profilePath);
-    return { ok: true, id: name, profiles: await this.listProfiles() };
+    if (wasActive) {
+      await fs.writeFile(path.join(base, "active_profile"), "", "utf8");
+    }
+    return { ok: true, id: safe, profiles: await this.listProfiles() };
   }
 
   async listCronJobs(): Promise<HermesCronJob[]> {
@@ -1054,6 +1066,26 @@ export class HermesWebUiService {
 
   private async currentHermesHome() {
     return await resolveActiveHermesHome(await this.baseHermesHome());
+  }
+
+  private async activeProfileName(baseHome: string) {
+    const active = (await fs.readFile(path.join(baseHome, "active_profile"), "utf8").catch(() => "")).trim();
+    if (!active || /[\\/]/.test(active)) return "default";
+    const stat = await fs.stat(path.join(baseHome, "profiles", active)).catch(() => undefined);
+    return stat?.isDirectory() ? active : "default";
+  }
+
+  private async resolveProfileName(baseHome: string, name: string) {
+    const validation = validateProfileName(name);
+    if (!validation.valid) {
+      throw new Error(`Profile 验证失败: ${validation.errors.join(", ")}`);
+    }
+    const safe = name.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+    if (!safe) throw new Error("Profile 名称不能为空。");
+    if (safe === "default") return safe;
+    const stat = await fs.stat(path.join(baseHome, "profiles", safe)).catch(() => undefined);
+    if (!stat?.isDirectory()) throw new Error(`Agent 不存在：${safe}`);
+    return safe;
   }
 
   private settingsPath() {

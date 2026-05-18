@@ -34,6 +34,7 @@ import type {
 import { POLICY_OPTIONS, bridgeCapabilityRows, enforcementMatrix, policyBlockReason } from "../../permissionModel";
 import { usePermissionOverview } from "../../../hooks/usePermissionOverview";
 import { buildHermesSetupViewModel, type HermesSetupAction } from "../settings/hermesSetupViewModel";
+import { InstallSourceDialog, type InstallSourceChoice } from "../InstallSourceDialog";
 
 type Tone = "ok" | "warn" | "danger" | "neutral";
 type InstallSourceKind = "official" | "mirror" | "custom";
@@ -80,6 +81,8 @@ export function SettingsPanel(props: {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<EngineUpdateStatus | undefined>();
+  const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
+  const [lastInstallSourceKind, setLastInstallSourceKind] = useState<InstallSourceChoice | undefined>();
   const permissionOverview = usePermissionOverview({ autoLoad: false });
 
   useEffect(() => {
@@ -189,8 +192,10 @@ export function SettingsPanel(props: {
     else store.warning("取消安装", result.message);
   }
 
-  async function installHermes() {
+  async function installHermes(kind: InstallSourceChoice) {
     if (installingHermes) return;
+    setSourceDialogOpen(false);
+    setLastInstallSourceKind(kind);
     setInstallingHermes(true);
     setInstallEvent(undefined);
     setInstallLogLines([]);
@@ -202,7 +207,7 @@ export function SettingsPanel(props: {
       store.setRuntimeConfig(saved);
       const result = await window.workbenchClient.installHermes({
         ...(rootPath.trim() ? { rootPath: rootPath.trim() } : {}),
-        source: installSourceOption(nextRuntime),
+        source: { kind },
       });
       if (result.rootPath) setRootPath(result.rootPath);
       await reloadOverview();
@@ -285,7 +290,7 @@ export function SettingsPanel(props: {
         });
         return;
       }
-      void installHermes();
+      setSourceDialogOpen(true);
       return;
     }
     if (action === "update") {
@@ -359,6 +364,12 @@ export function SettingsPanel(props: {
   const bridgeCapabilities = permissionOverview.data ? overviewBridgeCapabilities(permissionOverview.data) : bridgeCapabilityRows(bridge, effectiveRuntime());
   return (
     <div className="space-y-3">
+      <InstallSourceDialog
+        busy={installingHermes}
+        onClose={() => setSourceDialogOpen(false)}
+        onSelect={(kind) => void installHermes(kind)}
+        open={sourceDialogOpen}
+      />
       <AgentActionCard
         status={status}
         detailsOpen={detailsOpen}
@@ -435,6 +446,8 @@ export function SettingsPanel(props: {
               onToggleLog={() => setInstallLogOpen((value) => !value)}
               installStartTime={installStartTime}
               onCancel={() => void handleCancelInstall()}
+              onRetryMirror={() => void installHermes("mirror")}
+              showMirrorRetry={installEvent.stage === "failed" && lastInstallSourceKind === "official"}
             />
           ) : null}
         </div>
@@ -585,17 +598,6 @@ function runtimeForSourceKind(runtime: HermesRuntimeConfig, kind: InstallSourceK
       commit: runtime.installSource?.commit,
       sourceLabel: "custom",
     },
-  };
-}
-
-function installSourceOption(runtime: HermesRuntimeConfig) {
-  const kind = sourceKind(runtime);
-  if (kind === "official" || kind === "mirror") return { kind };
-  return {
-    kind: "custom" as const,
-    repoUrl: runtime.installSource?.repoUrl,
-    branch: runtime.installSource?.branch,
-    commit: runtime.installSource?.commit,
   };
 }
 
@@ -941,6 +943,8 @@ function InstallProgressView(props: {
   onToggleLog: () => void;
   installStartTime?: number | null;
   onCancel?: () => void;
+  onRetryMirror?: () => void;
+  showMirrorRetry?: boolean;
 }) {
   const progress = Math.max(0, Math.min(100, props.event.progress));
   const isRunning = !["completed", "failed", "cancelled"].includes(props.event.stage);
@@ -1020,6 +1024,20 @@ function InstallProgressView(props: {
           >
             <ExternalLink size={11} /> 查看 Nous 官方文档
           </a>
+        </div>
+      ) : null}
+      {props.showMirrorRetry ? (
+        <div className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-2.5 py-2">
+          <p className="text-[11px] leading-4 text-amber-700">
+            官方 GitHub 源安装失败。可由你确认后改用国内社区镜像重试，不会静默切换来源。
+          </p>
+          <button
+            type="button"
+            onClick={props.onRetryMirror}
+            className="mt-2 inline-flex items-center gap-1 rounded-md border border-amber-200 bg-white px-2 py-1 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100"
+          >
+            <Network size={12} /> 改用国内社区镜像重试
+          </button>
         </div>
       ) : null}
     </div>

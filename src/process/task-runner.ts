@@ -13,6 +13,7 @@ import type { TaskPreflightService } from "./task-preflight-service";
 import type { WorkspaceLock } from "./workspace-lock";
 import { IpcChannels } from "../shared/ipc";
 import { extractInlineLocalFilePaths, normalizeLocalFilePathKey } from "../shared/local-file-paths";
+import { estimateTextTokens } from "../shared/token-estimator";
 import { resolveEnginePermissions } from "../shared/types";
 import { deriveTaskEvents } from "./task-derived-event-parser";
 import { createTaskUsageState, trackTaskUsage, type TaskUsageState } from "./task-usage-meter";
@@ -28,6 +29,7 @@ import type {
   StartTaskInput,
   TaskEventEnvelope,
   TaskStartResult,
+  WorkSession,
 } from "../shared/types";
 
 const now = () => new Date().toISOString();
@@ -39,6 +41,31 @@ const HERMES_WAIT_NOTICES = [
   { afterMs: 10_000, message: "Hermes 仍在运行，但暂时还没有返回可显示正文。" },
   { afterMs: 25_000, message: "Hermes 本轮等待时间偏长，建议检查本地 CLI、模型配置或网络连通性。" },
 ];
+
+export function resolveHermesConversationIdForRuntime(input: {
+  workSessionId: string;
+  workSession?: Pick<WorkSession, "hermesSessionId" | "model">;
+  runtimeEnv: Pick<EngineRuntimeEnv, "profileId" | "provider" | "model" | "baseUrl" | "sourceType">;
+}) {
+  const currentModel = normalizeModelName(input.runtimeEnv.model);
+  const previousModel = normalizeModelName(input.workSession?.model);
+  if (currentModel && previousModel && currentModel !== previousModel) {
+    const identity = [
+      input.runtimeEnv.profileId,
+      input.runtimeEnv.provider,
+      input.runtimeEnv.model,
+      input.runtimeEnv.baseUrl ?? "",
+      input.runtimeEnv.sourceType ?? "",
+    ].join("|");
+    const suffix = crypto.createHash("sha1").update(identity).digest("hex").slice(0, 10);
+    return `${input.workSessionId}-model-${suffix}`;
+  }
+  return input.workSession?.hermesSessionId || input.workSessionId;
+}
+
+function normalizeModelName(model: string | undefined) {
+  return model?.trim().toLowerCase() ?? "";
+}
 
 export class TaskRunner {
   private readonly running = new Map<string, AbortController>();
@@ -124,8 +151,8 @@ export class TaskRunner {
 
     const permissions = resolveEnginePermissions(runtimeConfig, actualEngine);
     const workSession = await this.workSessionService?.read(workSessionId).catch(() => undefined);
-    const hermesSessionId = workSession?.hermesSessionId || workSessionId;
-    await this.sessionAgentInsightService.recordTaskStart({
+    const hermesSessionId = resolveHermesConversationIdForRuntime({ workSessionId, workSession, runtimeEnv });
+    void this.sessionAgentInsightService.recordTaskStart({
       sessionId: workSessionId,
       taskRunId,
       runtimeConfig,
@@ -555,7 +582,7 @@ export class TaskRunner {
     await this.sessionLog.append(workspaceId, envelope);
     this.getMainWindow()?.webContents.send(IpcChannels.taskEvent, envelope);
     if (workSessionId) {
-      await this.sessionAgentInsightService.recordUsage({
+      void this.sessionAgentInsightService.recordUsage({
         sessionId: workSessionId,
         workspaceId,
       }).catch((error) => {
@@ -570,7 +597,7 @@ export class TaskRunner {
   }
 
   private estimateTokens(text: string) {
-    return Math.ceil(text.length / 4);
+    return estimateTextTokens(text);
   }
 
   private captureFirstOutputMetric(sessionId: string, event: EngineEvent) {

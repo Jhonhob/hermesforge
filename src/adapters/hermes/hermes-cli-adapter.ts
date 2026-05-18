@@ -1700,6 +1700,7 @@ export class HermesCliAdapter implements EngineAdapter {
         HERMES_INFERENCE_PROVIDER: this.hermesProvider(runtimeEnv.provider, normalizedSourceType),
         AI_MODEL: normalizedModel,
         OPENAI_MODEL: normalizedModel,
+        ...(runtimeEnv.contextWindow ? { HERMES_FORGE_CONTEXT_WINDOW: String(runtimeEnv.contextWindow) } : {}),
       } : {}),
     };
     return env;

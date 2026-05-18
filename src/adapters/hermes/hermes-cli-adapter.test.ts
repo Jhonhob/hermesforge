@@ -639,12 +639,12 @@ describe("HermesCliAdapter Windows launch", () => {
   it("infers MiMo Token Plan endpoints as Xiaomi and normalizes model casing for CLI launch", async () => {
     const adapter = Object.create(HermesCliAdapter.prototype) as {
       activeHermesHome(): Promise<string>;
-      providerArgs(request: { runtimeEnv?: { provider: string; sourceType?: string; model: string; baseUrl?: string; env?: Record<string, string> } }): string[];
-      modelArgs(request: { runtimeEnv?: { provider: string; sourceType?: string; model: string; baseUrl?: string; env?: Record<string, string> } }): string[];
+      providerArgs(request: { runtimeEnv?: { provider: string; sourceType?: string; model: string; baseUrl?: string; contextWindow?: number; env?: Record<string, string> } }): string[];
+      modelArgs(request: { runtimeEnv?: { provider: string; sourceType?: string; model: string; baseUrl?: string; contextWindow?: number; env?: Record<string, string> } }): string[];
       hermesEnv(
         rootPath: string,
         runtime: { mode: "windows" },
-        request: { runtimeEnv: { provider: string; sourceType?: string; model: string; baseUrl?: string; env?: Record<string, string> } },
+        request: { runtimeEnv: { provider: string; sourceType?: string; model: string; baseUrl?: string; contextWindow?: number; env?: Record<string, string> } },
       ): Promise<NodeJS.ProcessEnv>;
     };
     adapter.activeHermesHome = async () => "C:\\Users\\example\\Hermes Agent";
@@ -654,6 +654,7 @@ describe("HermesCliAdapter Windows launch", () => {
       sourceType: "openai_compatible",
       model: "MiMo-V2.5-Pro",
       baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      contextWindow: 256000,
       env: {
         AI_MODEL: "MiMo-V2.5-Pro",
         OPENAI_MODEL: "MiMo-V2.5-Pro",
@@ -673,6 +674,7 @@ describe("HermesCliAdapter Windows launch", () => {
     expect(env.HERMES_INFERENCE_PROVIDER).toBe("xiaomi");
     expect(env.OPENAI_MODEL).toBe("mimo-v2.5-pro");
     expect(env.AI_MODEL).toBe("mimo-v2.5-pro");
+    expect(env.HERMES_FORGE_CONTEXT_WINDOW).toBe("256000");
     expect(env.XIAOMI_BASE_URL).toBe("https://token-plan-cn.xiaomimimo.com/v1");
   });
 

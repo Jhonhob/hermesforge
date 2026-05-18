@@ -241,7 +241,7 @@ export function HermesHeader(props: {
   ];
 
   return (
-    <header className="hermes-header relative z-40 flex h-12 items-center justify-between border-b border-slate-200/70 bg-white px-3" role="banner">
+    <header className="hermes-header relative z-40 flex h-12 items-center justify-between border-b border-slate-200/45 bg-[#f6f7f9] px-3" role="banner">
       <div className="flex min-w-0 items-center gap-2">
         <div
           className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-slate-200/80 bg-slate-950 text-white shadow-[0_6px_16px_rgba(15,23,42,0.10)]"
@@ -253,7 +253,7 @@ export function HermesHeader(props: {
 
         {activeSession ? (
           editingTitle ? (
-            <div className="flex items-center gap-1.5 rounded-full border border-slate-200/75 bg-white/80 px-1.5 py-1 shadow-[0_8px_22px_rgba(15,23,42,0.05)]">
+            <div className="flex items-center gap-1.5 rounded-full border border-slate-200/60 bg-[#f6f7f9] px-1.5 py-1">
               <input
                 className={inputClass}
                 value={titleValue}
@@ -273,7 +273,7 @@ export function HermesHeader(props: {
             </div>
           ) : (
             <button
-              className="group flex h-8 min-w-0 max-w-[280px] items-center gap-2 rounded-full border border-slate-200/75 bg-white/70 px-2.5 text-left shadow-[0_8px_22px_rgba(15,23,42,0.04)] transition hover:border-slate-300 hover:bg-white hover:shadow-[0_10px_26px_rgba(15,23,42,0.07)]"
+              className="group flex h-8 min-w-0 max-w-[280px] items-center gap-2 rounded-full border border-slate-200/60 bg-[#f6f7f9] px-2.5 text-left transition hover:border-slate-300 hover:bg-white/55"
               onClick={startEditing}
               title={`会话 ID：${activeSession.id}`}
               type="button"

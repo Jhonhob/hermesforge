@@ -7,8 +7,16 @@ import type { EngineEvent, SessionAgentInsightUsage, TaskEventEnvelope } from ".
 import { redactSensitiveValue } from "../shared/redaction";
 
 const RECENT_LOG_TAIL_BYTES = 2 * 1024 * 1024;
+const DEFAULT_RECENT_SESSION_RUNS = 160;
+type UsageEvent = Extract<EngineEvent, { type: "usage" }>;
+type UsageFileSummary = {
+  signature: string;
+  latestBySessionAndTask: Map<string, Map<string, UsageEvent>>;
+};
 
 export class SessionLog {
+  private readonly usageFileCache = new Map<string, UsageFileSummary>();
+
   constructor(private readonly appPaths: AppPaths) {}
 
   async append(workspaceId: string, envelope: TaskEventEnvelope) {
@@ -39,6 +47,36 @@ export class SessionLog {
     return events
       .sort((left, right) => this.eventTimestamp(left.event).localeCompare(this.eventTimestamp(right.event)))
       .slice(-maxEvents);
+  }
+
+  async readRecentSessionRuns(workspaceId: string, workSessionId: string, maxRuns = DEFAULT_RECENT_SESSION_RUNS) {
+    const dir = this.appPaths.workspaceSessionDir(workspaceId);
+    const files = await fs.readdir(dir).catch(() => []);
+    const byTaskRun = new Map<string, TaskEventEnvelope[]>();
+
+    for (const file of files.filter((name) => name.endsWith(".jsonl"))) {
+      for await (const line of readJsonlLines(path.join(dir, file))) {
+        try {
+          const event = JSON.parse(line) as TaskEventEnvelope;
+          if (event.workSessionId !== workSessionId) continue;
+          const key = event.taskRunId || event.sessionId || file;
+          const events = byTaskRun.get(key) ?? [];
+          events.push(event);
+          byTaskRun.set(key, events);
+        } catch {
+          // Ignore corrupt diagnostic lines.
+        }
+      }
+    }
+
+    const latestRuns = [...byTaskRun.values()]
+      .map((events) => [...events].sort((left, right) => this.eventTimestamp(left.event).localeCompare(this.eventTimestamp(right.event))))
+      .sort((left, right) => this.eventTimestamp(left.at(-1)?.event).localeCompare(this.eventTimestamp(right.at(-1)?.event)))
+      .slice(-maxRuns);
+
+    return latestRuns
+      .flat()
+      .sort((left, right) => this.eventTimestamp(left.event).localeCompare(this.eventTimestamp(right.event)));
   }
 
   async summarizeRecentRuns(workspaceId: string, maxEvents = 400) {
@@ -72,7 +110,7 @@ export class SessionLog {
   async aggregateUsageForSession(workspaceId: string, workSessionId: string): Promise<SessionAgentInsightUsage | undefined> {
     const dir = this.appPaths.workspaceSessionDir(workspaceId);
     const files = await fs.readdir(dir).catch(() => []);
-    const latestByTaskRun = new Map<string, Extract<EngineEvent, { type: "usage" }>>();
+    const latestByTaskRun = new Map<string, UsageEvent>();
     let latestInputTokens = 0;
     let latestOutputTokens = 0;
     let latestEstimatedCostUsd = 0;
@@ -80,25 +118,25 @@ export class SessionLog {
     let updatedAt = "";
 
     for (const file of files.filter((name) => name.endsWith(".jsonl"))) {
-      for await (const line of readJsonlLines(path.join(dir, file))) {
-        try {
-          const event = JSON.parse(line) as TaskEventEnvelope;
-          if (event.workSessionId !== workSessionId || event.event.type !== "usage") {
-            continue;
-          }
-          const existing = latestByTaskRun.get(event.taskRunId);
-          if (!existing || event.event.at >= existing.at) {
-            latestByTaskRun.set(event.taskRunId, event.event);
-          }
-          if (event.event.at >= updatedAt) {
-            latestInputTokens = event.event.inputTokens;
-            latestOutputTokens = event.event.outputTokens;
-            latestEstimatedCostUsd = event.event.estimatedCostUsd;
-            latestSource = event.event.source === "actual" ? "actual" : "estimated";
-            updatedAt = event.event.at;
-          }
-        } catch {
-          // Ignore corrupt diagnostic lines.
+      const fileSummary = await this.readUsageFileSummary(path.join(dir, file)).catch(() => undefined);
+      if (!fileSummary) {
+        continue;
+      }
+      const sessionUsage = fileSummary.latestBySessionAndTask.get(workSessionId);
+      if (!sessionUsage) {
+        continue;
+      }
+      for (const [taskRunId, usage] of sessionUsage) {
+        const existing = latestByTaskRun.get(taskRunId);
+        if (!existing || usage.at >= existing.at) {
+          latestByTaskRun.set(taskRunId, usage);
+        }
+        if (usage.at >= updatedAt) {
+          latestInputTokens = usage.inputTokens;
+          latestOutputTokens = usage.outputTokens;
+          latestEstimatedCostUsd = usage.estimatedCostUsd;
+          latestSource = usage.source === "actual" ? "actual" : "estimated";
+          updatedAt = usage.at;
         }
       }
     }
@@ -144,6 +182,42 @@ export class SessionLog {
   redact<T>(value: T): T {
     return redactSensitiveValue(value);
   }
+
+  private async readUsageFileSummary(filePath: string): Promise<UsageFileSummary> {
+    const signature = await fileSignature(filePath);
+    const cached = this.usageFileCache.get(filePath);
+    if (cached?.signature === signature) {
+      return cached;
+    }
+
+    const latestBySessionAndTask = new Map<string, Map<string, UsageEvent>>();
+    for await (const line of readJsonlLines(filePath)) {
+      try {
+        const envelope = JSON.parse(line) as TaskEventEnvelope;
+        if (!envelope.workSessionId || envelope.event.type !== "usage") continue;
+        let byTask = latestBySessionAndTask.get(envelope.workSessionId);
+        if (!byTask) {
+          byTask = new Map<string, UsageEvent>();
+          latestBySessionAndTask.set(envelope.workSessionId, byTask);
+        }
+        const existing = byTask.get(envelope.taskRunId);
+        if (!existing || envelope.event.at >= existing.at) {
+          byTask.set(envelope.taskRunId, envelope.event);
+        }
+      } catch {
+        // Ignore corrupt diagnostic lines.
+      }
+    }
+
+    const summary = { signature, latestBySessionAndTask };
+    this.usageFileCache.set(filePath, summary);
+    return summary;
+  }
+}
+
+async function fileSignature(filePath: string) {
+  const stat = await fs.stat(filePath);
+  return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
 }
 
 async function readFileTail(filePath: string, maxBytes: number) {

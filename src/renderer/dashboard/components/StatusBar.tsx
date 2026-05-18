@@ -1,33 +1,42 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, DownloadCloud, Loader2, RadioTower, Server, ServerOff, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ChevronDown, DownloadCloud, Loader2, RadioTower, Server, ServerOff, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import type { ClientUpdateEvent, HermesGatewayStatus, HermesProbeSummary, HermesStatusSummary } from "../../../shared/types";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
 
 type ConnectionState = "connected" | "warning" | "disconnected" | "checking";
 type BadgeTone = "ok" | "warn" | "error" | "idle";
+type StatusLevel = BadgeTone | "checking" | "notice";
 
 export function StatusBar() {
-  const store = useAppStore();
-  const [apiStatus, setApiStatus] = useState<ConnectionState>(store.clientInfo ? "connected" : "checking");
-  const [hermesStatus, setHermesStatus] = useState<ConnectionState>(resolveHermesConnection(store.hermesProbe, store.hermesStatus));
+  const statusSource = useAppStore(useShallow((state) => ({
+    clientInfo: state.clientInfo,
+    hermesProbe: state.hermesProbe,
+    hermesStatus: state.hermesStatus,
+    hermesRuntimeMode: state.runtimeConfig?.hermesRuntime?.mode,
+  })));
+  const [apiStatus, setApiStatus] = useState<ConnectionState>(statusSource.clientInfo ? "connected" : "checking");
+  const [hermesStatus, setHermesStatus] = useState<ConnectionState>(resolveHermesConnection(statusSource.hermesProbe, statusSource.hermesStatus));
   const [gatewayStatus, setGatewayStatus] = useState<HermesGatewayStatus | undefined>();
   const [clientUpdate, setClientUpdate] = useState<ClientUpdateEvent | undefined>();
+  const [open, setOpen] = useState(false);
   const [lastChecked] = useState<string | null>(null);
-  const hermesUpdate = store.hermesStatus?.update;
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  const hermesUpdate = statusSource.hermesStatus?.update;
 
   useEffect(() => {
-    if (store.clientInfo) {
+    if (statusSource.clientInfo) {
       setApiStatus("connected");
     }
-  }, [store.clientInfo]);
+  }, [statusSource.clientInfo]);
 
   useEffect(() => {
     setHermesStatus((current) => {
-      const resolved = resolveHermesConnection(store.hermesProbe, store.hermesStatus);
+      const resolved = resolveHermesConnection(statusSource.hermesProbe, statusSource.hermesStatus);
       return current === "checking" || current === "disconnected" ? resolved : current;
     });
-  }, [store.hermesProbe, store.hermesStatus]);
+  }, [statusSource.hermesProbe, statusSource.hermesStatus]);
 
   useEffect(() => window.workbenchClient?.onClientUpdateEvent?.((event) => setClientUpdate(event)), []);
 
@@ -49,12 +58,30 @@ export function StatusBar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    function handlePointerDown(event: MouseEvent) {
+      if (statusRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
   const statusItems = useMemo(() => [
     makeStatusItem({
       key: "api",
       shortLabel: "API",
       detail: apiStatus === "connected" ? "API 连接正常" : apiStatus === "disconnected" ? "API 服务不可用" : "正在检查 API",
       tone: connectionTone(apiStatus),
+      level: apiStatus === "checking" ? "checking" : connectionTone(apiStatus),
       icon: apiStatus === "connected" ? Wifi : apiStatus === "disconnected" ? WifiOff : Loader2,
       spinning: apiStatus === "checking",
       lastChecked,
@@ -65,8 +92,9 @@ export function StatusBar() {
       shortLabel: hermesUpdate?.updateAvailable ? "Hermes 更新" : "Hermes",
       detail: hermesUpdate?.updateAvailable
         ? hermesUpdate.message
-        : hermesDetail(hermesStatus, store.hermesProbe, store.hermesStatus, store.runtimeConfig?.hermesRuntime?.mode),
+        : hermesDetail(hermesStatus, statusSource.hermesProbe, statusSource.hermesStatus, statusSource.hermesRuntimeMode),
       tone: hermesUpdate?.updateAvailable ? "warn" : connectionTone(hermesStatus),
+      level: hermesUpdate?.updateAvailable ? "notice" : hermesStatus === "checking" ? "checking" : connectionTone(hermesStatus),
       icon: hermesUpdate?.updateAvailable ? DownloadCloud : hermesStatus === "connected" ? ShieldCheck : hermesIcon(hermesStatus),
       spinning: hermesStatus === "checking",
       lastChecked,
@@ -77,6 +105,7 @@ export function StatusBar() {
       shortLabel: "Gateway",
       detail: gatewayTooltip(gatewayStatus),
       tone: gatewayTone(gatewayStatus),
+      level: gatewayStatus?.autoStartState === "starting" ? "checking" : gatewayTone(gatewayStatus),
       icon: gatewayIcon(gatewayStatus),
       spinning: gatewayStatus?.autoStartState === "starting",
       lastChecked,
@@ -87,64 +116,77 @@ export function StatusBar() {
       shortLabel: updateShortLabel(clientUpdate),
       detail: clientUpdate?.message ?? "客户端更新状态",
       tone: updateTone(clientUpdate),
+      level: updateLevel(clientUpdate),
       icon: updateIcon(clientUpdate),
       spinning: clientUpdate?.status === "checking" || clientUpdate?.status === "downloading",
       lastChecked,
       glowing: updateTone(clientUpdate) === "ok" || updateTone(clientUpdate) === "warn",
     }),
-  ], [apiStatus, clientUpdate, gatewayStatus, hermesStatus, hermesUpdate, lastChecked, store.hermesProbe, store.hermesStatus]);
+  ], [apiStatus, clientUpdate, gatewayStatus, hermesStatus, hermesUpdate, lastChecked, statusSource.hermesProbe, statusSource.hermesRuntimeMode, statusSource.hermesStatus]);
+  const overall = summarizeStatus(statusItems);
+  const OverallIcon = overall.icon;
 
   return (
-    <>
-      {/* Small screen: compact status dots */}
-      <div className="flex items-center gap-1.5 lg:hidden">
+    <div ref={statusRef} className="relative">
+      <button
+        aria-expanded={open}
+        aria-label={`${overall.label}：${overall.detail}`}
+        className={cn(
+          "hermes-status-summary inline-flex h-8 max-w-[168px] items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-semibold shadow-[0_8px_22px_rgba(15,23,42,0.045)] transition hover:-translate-y-px hover:bg-white hover:shadow-[0_12px_28px_rgba(15,23,42,0.075)] max-sm:w-8 max-sm:justify-center max-sm:px-0",
+          toneClass(overall.tone),
+        )}
+        onClick={() => setOpen((value) => !value)}
+        title={overall.detail}
+        type="button"
+      >
+        <span className={cn("inline-flex h-4 w-4 shrink-0 items-center justify-center", overall.spinning && "animate-spin")}>
+          <OverallIcon size={12} />
+        </span>
+        <span className="min-w-0 truncate max-sm:hidden">{overall.label}</span>
+        <span data-testid="status-summary-light" className={cn("hermes-status-light max-sm:hidden", statusLightClass(overall.tone), overall.tone === "idle" && "hermes-status-light--idle")}>
+          <span className="sr-only">{overall.tone}</span>
+        </span>
+        <ChevronDown size={12} className={cn("shrink-0 text-slate-400 transition max-sm:hidden", open && "rotate-180")} />
+      </button>
+
+      {open ? (
+        <div className="hermes-popover absolute right-0 top-[calc(100%+10px)] z-[45] w-72 rounded-2xl border border-slate-200/80 bg-white p-2 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+          <div className="px-2 pb-2 pt-1">
+            <p className="text-[13px] font-semibold text-slate-900">{overall.label}</p>
+            <p className="mt-0.5 truncate text-[11px] text-slate-400">{overall.detail}</p>
+          </div>
         {statusItems.map((item) => {
           const Icon = item.icon;
           return (
-            <button
-              key={item.key}
-              className={cn("grid h-6 w-6 place-items-center rounded-full transition", toneClass(item.tone))}
-              title={item.detail}
-              aria-label={item.detail}
-              type="button"
-            >
-              <span className={cn("inline-flex items-center justify-center", item.spinning && "animate-spin")}>
-                <Icon size={10} />
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {/* Large screen: full status chips */}
-      <div className="hidden items-center gap-1 lg:flex">
-        {statusItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
+            <div
               key={item.key}
               className={cn(
-                "hermes-status-chip inline-flex h-7 items-center gap-1.5 rounded-full border px-2 text-[10px] font-medium transition",
-                toneClass(item.tone),
+                "hermes-status-detail-row flex items-start gap-2 rounded-xl px-2.5 py-2 text-left transition",
+                item.level === "error" && "bg-rose-50 text-rose-700",
+                (item.level === "warn" || item.level === "notice" || item.level === "checking") && "bg-amber-50/75 text-amber-700",
+                (item.level === "ok" || item.level === "idle") && "text-slate-500",
               )}
               title={`${item.detail}${item.lastChecked ? ` · 最后检查 ${item.lastChecked}` : ""}`}
-              aria-label={item.detail}
-              type="button"
             >
-              <span className={cn("inline-flex h-3.5 w-3.5 items-center justify-center", item.spinning && "animate-spin")}>
-                <Icon size={10} />
+              <span className={cn("mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/75", item.spinning && "animate-spin")}>
+                <Icon size={12} />
               </span>
-              <span>{item.shortLabel}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-semibold">{item.shortLabel}</span>
+                <span className="mt-0.5 block truncate text-[11px] opacity-75">{item.detail}</span>
+              </span>
               <span
                 data-testid={`status-light-${item.key}`}
-                className={cn("hermes-status-light", statusLightClass(item.tone), !item.glowing && !item.spinning && item.tone !== "error" && "hermes-status-light--idle")}
+                className={cn("hermes-status-light mt-2 shrink-0", statusLightClass(item.tone), !item.glowing && !item.spinning && item.tone !== "error" && "hermes-status-light--idle")}
               >
                 <span className="sr-only">{item.tone}</span>
               </span>
-            </button>
+            </div>
           );
         })}
-      </div>
-    </>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -153,6 +195,7 @@ function makeStatusItem(item: {
   shortLabel: string;
   detail: string;
   tone: BadgeTone;
+  level: StatusLevel;
   icon: typeof Wifi;
   spinning?: boolean;
   lastChecked: string | null;
@@ -233,6 +276,54 @@ function updateTone(event?: ClientUpdateEvent): BadgeTone {
   if (event?.status === "error") return "error";
   if (event?.status === "skipped") return "idle";
   return "idle";
+}
+
+function updateLevel(event?: ClientUpdateEvent): StatusLevel {
+  if (event?.status === "available" || event?.status === "downloaded") return "notice";
+  if (event?.status === "checking" || event?.status === "downloading") return "checking";
+  if (event?.status === "error") return "error";
+  return "idle";
+}
+
+function summarizeStatus(items: ReturnType<typeof makeStatusItem>[]) {
+  if (items.some((item) => item.level === "error")) {
+    return {
+      label: "环境需处理",
+      detail: firstDetail(items, "error"),
+      tone: "error" as BadgeTone,
+      icon: AlertCircle,
+      spinning: false,
+    };
+  }
+  if (items.some((item) => item.level === "warn" || item.level === "notice")) {
+    return {
+      label: "有提醒",
+      detail: firstDetail(items, "warn", "notice"),
+      tone: "warn" as BadgeTone,
+      icon: AlertCircle,
+      spinning: false,
+    };
+  }
+  if (items.some((item) => item.level === "checking")) {
+    return {
+      label: "检查中",
+      detail: firstDetail(items, "checking"),
+      tone: "warn" as BadgeTone,
+      icon: Loader2,
+      spinning: true,
+    };
+  }
+  return {
+    label: "环境就绪",
+    detail: "API、Hermes 与本地能力处于可用状态",
+    tone: "ok" as BadgeTone,
+    icon: ShieldCheck,
+    spinning: false,
+  };
+}
+
+function firstDetail(items: ReturnType<typeof makeStatusItem>[], ...levels: StatusLevel[]) {
+  return items.find((item) => levels.includes(item.level))?.detail ?? "状态需要关注";
 }
 
 function toneClass(tone: BadgeTone) {

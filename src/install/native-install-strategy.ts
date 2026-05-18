@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ const COMMUNITY_MIRROR_WINDOWS_INSTALLER_URL = "https://res1.hermesagent.org.cn/
 const OFFICIAL_HERMES_REPO_URL = "https://github.com/NousResearch/hermes-agent.git";
 
 type PythonLauncher = { command: string; argsPrefix: string[]; label: string };
+type DependencyAvailability = { available: boolean; message: string; python?: PythonLauncher };
 type GitSyncResult =
   | {
       ok: true;
@@ -266,9 +268,7 @@ export class NativeInstallStrategy implements InstallStrategy {
         pythonArgs: [await this.resolveHermesCliPath(hermesRoot), ...args],
         cwd: hermesRoot,
         env: {
-          PYTHONUTF8: "1",
-          PYTHONIOENCODING: "utf-8",
-          PYTHONPATH: runtimeRoot,
+          ...this.pythonCommandEnv({ pythonPathEntries: [runtimeRoot] }),
           NO_COLOR: "1",
           FORCE_COLOR: "0",
           HERMES_HOME: adapter.toRuntimePath(hermesHome),
@@ -281,9 +281,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       args: isHermesCliExecutable(hermesCli) ? args : [hermesCli, ...args],
       cwd: hermesRoot,
       env: {
-        PYTHONUTF8: "1",
-        PYTHONIOENCODING: "utf-8",
-        PYTHONPATH: `${hermesRoot}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
+        ...this.pythonCommandEnv({ pythonPathEntries: [hermesRoot] }),
         NO_COLOR: "1",
         FORCE_COLOR: "0",
         HERMES_HOME: hermesHome,
@@ -303,7 +301,7 @@ export class NativeInstallStrategy implements InstallStrategy {
     const startedAt = requestedStartedAt ?? new Date().toISOString();
     const logDir = path.join(this.appPaths.baseDir(), "diagnostics", "install-logs");
     const logPath = path.join(logDir, `hermes-install-${startedAt.replace(/[:.]/g, "-")}.log`);
-    const scriptPath = path.join(logDir, `official-install-${startedAt.replace(/[:.]/g, "-")}.ps1`);
+    const scriptPath = path.join(logDir, `hermes-install-${startedAt.replace(/[:.]/g, "-")}.ps1`);
 
     const configForSource = await this.configStore.read().catch(() => ({ modelProfiles: [], updateSources: {} }));
     const installSource = resolveInstallSourceFromOption(configForSource, options.source);
@@ -393,26 +391,20 @@ export class NativeInstallStrategy implements InstallStrategy {
 
       this.throwIfAborted(signal);
 
-      const githubSlow = await this.isGithubSlow(log);
+      const githubSlow = installSource.sourceLabel === "official" && await this.isGithubSlow(log);
       if (githubSlow) {
         emit("preflight", 10, "检测到 GitHub 访问较慢，建议切换国内社区镜像后重试。", "如果继续安装，脚本从 GitHub 下载依赖可能会耗时较长。可在设置中心切换安装来源为国内社区镜像，或取消后手动安装 Hermes。", { sourceUrl: installerUrls[0] });
       }
 
-      emit("preflight", 12, "正在检查系统依赖（Git / Python）。", "如果缺失将通过 winget 自动安装，避免安装脚本在后台长时间下载。");
-      const gitReady = await this.ensureGitAvailable(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
-      if (!gitReady.ok) {
-        return await finish({ ok: false, rootPath, message: gitReady.message }, "failed");
-      }
-      const pythonReady = await this.ensurePythonAvailable(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
-      if (!pythonReady.ok) {
-        return await finish({ ok: false, rootPath, message: pythonReady.message }, "failed");
-      }
+      emit("preflight", 12, "正在快速检查系统依赖（Git / Python）。", "缺失时不会提前中断，Hermes 安装脚本会继续尝试准备所需依赖。");
+      await this.checkGitAvailability(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
+      await this.checkPythonAvailability(log, (stage, progress, message, detail) => emit(stage, progress, message, detail));
 
       this.throwIfAborted(signal);
       emit("downloading_script", 28, "正在下载 Hermes Windows 安装脚本。", installerUrls[0], { sourceUrl: installerUrls[0] });
       const download = await this.downloadOfficialInstallerScript(scriptPath, logDir, log, installerUrls, signal);
       if (!download.ok) {
-        return await finish({ ok: false, rootPath, message: `Hermes 安装脚本下载失败。请检查网络，或切换安装来源后重试。详情见安装日志。` }, "failed");
+        return await finish({ ok: false, rootPath, message: this.scriptDownloadFailureMessage(installSource.sourceLabel) }, "failed");
       }
       await this.patchOfficialInstallerScript(scriptPath, log);
 
@@ -429,13 +421,16 @@ export class NativeInstallStrategy implements InstallStrategy {
       }
 
       const mirrorEnv = await this.detectPipMirror(log);
-      const installerEnv: Record<string, string> | undefined = mirrorEnv
-        ? {
-            PIP_INDEX_URL: mirrorEnv,
-            UV_INDEX_URL: mirrorEnv,
-            PIP_TRUSTED_HOST: new URL(mirrorEnv).hostname,
-          }
-        : undefined;
+      const installerEnv: Record<string, string> = {
+        ...this.pythonCommandEnv(),
+        ...(mirrorEnv
+          ? {
+              PIP_INDEX_URL: mirrorEnv,
+              UV_INDEX_URL: mirrorEnv,
+              PIP_TRUSTED_HOST: new URL(mirrorEnv).hostname,
+            }
+          : {}),
+      };
       if (mirrorEnv) {
         emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本（已启用国内镜像）。", rootPath, { sourceUrl: download.url });
         log.push(`Using pip/uv mirror: ${mirrorEnv}`);
@@ -443,7 +438,7 @@ export class NativeInstallStrategy implements InstallStrategy {
         emit("running_installer", 45, "正在运行 Hermes Windows 安装脚本。", rootPath, { sourceUrl: download.url });
       }
       const installerArgs = await this.officialInstallerArgs(scriptPath, hermesHome, rootPath);
-      log.push(`Official installer args: ${installerArgs.join(" ")}`);
+      log.push(`Hermes installer args: ${installerArgs.join(" ")}`);
       let installerProgress = 45;
       const install = await this.runLogged("powershell.exe", installerArgs, logDir, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         signal,
@@ -467,11 +462,11 @@ export class NativeInstallStrategy implements InstallStrategy {
         return await finish({ ok: false, rootPath, message: "Hermes 安装已取消。" }, "cancelled");
       }
       if (install.exitCode !== 0) {
-        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath);
+        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath, installSource.sourceLabel);
         return await finish({ ok: false, rootPath, message: diagnostic }, "failed");
       }
       if (this.officialInstallerReportedFailure(install.stdout, install.stderr)) {
-        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath);
+        const diagnostic = this.installFailureMessage(install.stdout, install.stderr, logPath, installSource.sourceLabel);
         return await finish({ ok: false, rootPath, message: `Hermes 安装脚本报告失败：${diagnostic}` }, "failed");
       }
 
@@ -527,7 +522,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       log.push(`Install crashed: ${rawMessage}`);
       return await finish({
         ok: false,
-        message: `Hermes 自动安装失败，请查看安装日志或导出诊断报告。`,
+        message: `Hermes 自动安装失败，请查看安装日志或导出诊断报告。${this.sourceFailureHint(installSource.sourceLabel)}`,
         rootPath: await this.resolveInstallRoot(options.rootPath).catch(() => this.defaultInstallRoot()),
       }, "failed");
     }
@@ -561,8 +556,13 @@ export class NativeInstallStrategy implements InstallStrategy {
       ].join(" ");
       const result = await this.runLogged("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", downloadScript], cwd, log, 120_000, { signal });
       if (result.exitCode === 0 && await this.exists(scriptPath)) {
-        log.push(`Official installer downloaded from ${url}.`);
-        return { ok: true, url };
+        const bytes = await fs.readFile(scriptPath);
+        const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+        log.push(`Hermes installer downloaded from ${url}.`);
+        log.push(`Hermes installer source URL: ${url}`);
+        log.push(`Hermes installer content length: ${bytes.byteLength} bytes`);
+        log.push(`Hermes installer SHA256: ${sha256}`);
+        return { ok: true, url, sha256, contentLength: bytes.byteLength };
       }
       log.push(`Installer download failed from ${url}; trying next configured source if available.`);
     }
@@ -596,10 +596,20 @@ export class NativeInstallStrategy implements InstallStrategy {
     return /Installation failed:|uv installation failed|Python .* not available|Git not available and auto-install failed|Failed to download repository/i.test(output);
   }
 
-  private installFailureMessage(stdout: string, stderr: string, logPath: string) {
+  private installFailureMessage(stdout: string, stderr: string, logPath: string, sourceLabel?: InstallSource["sourceLabel"]) {
     const code = this.diagnosticCodeForOutput(`${stdout}\n${stderr}`);
     const hint = diagnosticHint(code);
-    return `${hint} 详情见安装日志：${logPath}`;
+    return `${hint} ${this.sourceFailureHint(sourceLabel)}详情见安装日志：${logPath}`;
+  }
+
+  private scriptDownloadFailureMessage(sourceLabel?: InstallSource["sourceLabel"]) {
+    return `Hermes 安装脚本下载失败。${this.sourceFailureHint(sourceLabel)}详情见安装日志。`;
+  }
+
+  private sourceFailureHint(sourceLabel?: InstallSource["sourceLabel"]) {
+    if (sourceLabel === "official") return "官方 GitHub 源失败时，可改用国内社区镜像重试。";
+    if (sourceLabel === "mirror") return "国内社区镜像失败时，请检查网络/镜像可达性，或切回官方 GitHub 源重试。";
+    return "请检查网络、仓库地址和安装来源配置。";
   }
 
   private installerUrlsForSource(source: InstallSource) {
@@ -733,7 +743,9 @@ export class NativeInstallStrategy implements InstallStrategy {
         continue;
       }
       lastCommand = `${candidate.command} ${candidate.args.join(" ")}`;
-      const result = await this.runLogged(candidate.command, candidate.args, rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS);
+      const result = await this.runLogged(candidate.command, candidate.args, rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
+      });
       lastResult = result;
       if (result.exitCode === 0) {
         const message = `${label} 已安装或更新完成。`;
@@ -778,47 +790,33 @@ export class NativeInstallStrategy implements InstallStrategy {
     }
   }
 
-  private async ensureGitAvailable(log: string[], emit: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void) {
+  private async checkGitAvailability(log: string[], emit: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void): Promise<DependencyAvailability> {
     const probe = await this.runtimeProbeService?.probe({ runtime: { mode: "windows", pythonCommand: "python", windowsAgentMode: "hermes_native" } }).catch(() => undefined);
     if (probe?.gitAvailable) {
       log.push(`RuntimeProbe Git: ${probe.commands.git.message}`);
-      return { ok: true, message: "Git 可用。" };
+      return { available: true, message: "Git 可用。" };
     }
     const git = await this.runLogged("git", ["--version"], process.cwd(), log, 15_000);
-    if (git.exitCode === 0) return { ok: true, message: "Git 可用。" };
-    emit("repairing_dependencies", 12, "未检测到 Git，正在尝试自动安装 Git。", "将通过 winget 安装 Git.Git。");
-    const repair = await this.repairWithWinget("git", "Git", "Git.Git");
-    log.push(`Git repair result: ${repair.message}`);
-    if (!repair.ok) {
-      return { ok: false, message: `无法自动安装 Hermes：未检测到可用 Git，且自动安装 Git 失败。${repair.recommendedFix ?? "请手动安装 Git for Windows 后重启客户端。"}` };
-    }
-    emit("preflight", 18, "Git 安装命令已完成，正在重新检测。", repair.recommendedFix);
-    const recheck = await this.runLogged("git", ["--version"], process.cwd(), log, 15_000);
-    return recheck.exitCode === 0
-      ? { ok: true, message: "Git 已可用。" }
-      : { ok: false, message: "Git 安装命令已执行，但当前进程仍未检测到 git 命令。请重启 Hermes Forge，或手动确认 Git 已加入 PATH。" };
+    if (git.exitCode === 0) return { available: true, message: "Git 可用。" };
+    const message = "未检测到系统 Git；将继续运行 Hermes 安装脚本，由脚本尝试准备 Git 或给出更精确的失败原因。";
+    log.push(message);
+    emit("preflight", 16, "未检测到系统 Git，安装将继续。", "如果脚本后续提示 Git 缺失，可在系统状态页一键修复，或手动安装 Git for Windows 后重试。");
+    return { available: false, message };
   }
 
-  private async ensurePythonAvailable(log: string[], emit: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void): Promise<{ ok: true; python: PythonLauncher; message: string } | { ok: false; message: string; python?: undefined }> {
+  private async checkPythonAvailability(log: string[], emit: (stage: Parameters<InstallPublisher>[0]["stage"], progress: number, message: string, detail?: string) => void): Promise<DependencyAvailability> {
     const probe = await this.runtimeProbeService?.probe({ runtime: { mode: "windows", pythonCommand: "python", windowsAgentMode: "hermes_native" } }).catch(() => undefined);
     if (probe?.runtimeMode === "windows" && probe.commands.python.available && probe.commands.python.command) {
       const python = { command: probe.commands.python.command, argsPrefix: probe.commands.python.args ?? [], label: probe.commands.python.label ?? probe.commands.python.command };
       log.push(`RuntimeProbe Python: ${probe.commands.python.message}`);
-      return { ok: true, python, message: `${python.label} 可用。` };
+      return { available: true, python, message: `${python.label} 可用。` };
     }
     const detected = await this.detectPythonLauncher(log);
-    if (detected) return { ok: true, python: detected, message: `${detected.label} 可用。` };
-    emit("repairing_dependencies", 20, "未检测到 Python，正在尝试自动安装 Python。", "将通过 winget 安装 Python.Python.3.12。");
-    const repair = await this.repairWithWinget("python", "Python", "Python.Python.3.12");
-    log.push(`Python repair result: ${repair.message}`);
-    if (!repair.ok) {
-      return { ok: false, message: `无法自动安装 Hermes：未检测到可用 Python，且自动安装 Python 失败。${repair.recommendedFix ?? "请手动安装 Python 后重启客户端。"}` };
-    }
-    emit("preflight", 26, "Python 安装命令已完成，正在重新检测。", repair.recommendedFix);
-    const recheck = await this.detectPythonLauncher(log);
-    return recheck
-      ? { ok: true, python: recheck, message: `${recheck.label} 已可用。` }
-      : { ok: false, message: "Python 安装命令已执行，但当前进程仍未检测到 python/py 命令。请重启 Hermes Forge，或手动确认 Python 已加入 PATH。" };
+    if (detected) return { available: true, python: detected, message: `${detected.label} 可用。` };
+    const message = "未检测到系统 Python；将继续运行 Hermes 安装脚本，由脚本尝试通过 uv/独立 Python 准备运行环境。";
+    log.push(message);
+    emit("preflight", 20, "未检测到系统 Python，安装将继续。", "Hermes 安装脚本通常会准备独立 Python；如果脚本后续失败，可切换国内社区镜像或手动安装 Python 后重试。");
+    return { available: false, message };
   }
 
   private async detectPythonLauncher(log: string[]): Promise<PythonLauncher | undefined> {
@@ -829,7 +827,9 @@ export class NativeInstallStrategy implements InstallStrategy {
     ];
     for (const candidate of candidates) {
       if (path.isAbsolute(candidate.command) && !(await this.exists(candidate.command))) continue;
-      const result = await this.runLogged(candidate.command, [...candidate.argsPrefix, "--version"], process.cwd(), log, 15_000);
+      const result = await this.runLogged(candidate.command, [...candidate.argsPrefix, "--version"], process.cwd(), log, 15_000, {
+        env: this.pythonCommandEnv(),
+      });
       if (result.exitCode === 0) return candidate;
     }
     return undefined;
@@ -850,6 +850,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       const sync = await this.runLogged("uv", ["sync"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
         heartbeatMs: 20_000,
         onHeartbeat: (elapsedSeconds) => emit?.("installing_dependencies", 68, "仍在使用 uv 同步 Hermes 依赖。", `已等待 ${elapsedSeconds} 秒，如果卡住可检查网络或稍后重试。`),
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
       }).catch(() => ({ exitCode: 1, stdout: "", stderr: "uv sync threw" } as Awaited<ReturnType<typeof runCommand>>));
       if (sync.exitCode === 0) {
         log.push("uv sync succeeded.");
@@ -888,14 +889,14 @@ export class NativeInstallStrategy implements InstallStrategy {
         const check = await runCommand(python.command, [...python.argsPrefix, "-m", "pip", "show", pkg], {
           cwd: rootPath,
           timeoutMs: 15_000,
-          env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+          env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
         });
         if (check.exitCode === 0) {
           log.push(`Package ${pkg} is installed but quarantined by PyPI; uninstalling before update...`);
           const uninstall = await runCommand(python.command, [...python.argsPrefix, "-m", "pip", "uninstall", pkg, "-y"], {
             cwd: rootPath,
             timeoutMs: 30_000,
-            env: { PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+            env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
           });
           log.push(uninstall.exitCode === 0 ? `Uninstalled ${pkg}.` : `Failed to uninstall ${pkg}: ${uninstall.stderr.slice(0, 200)}`);
         }
@@ -908,9 +909,7 @@ export class NativeInstallStrategy implements InstallStrategy {
   /** 检测网络环境，为中国大陆用户自动选择 PyPI 国内镜像 */
   private async pipInstallEnvWithMirror(): Promise<Record<string, string>> {
     const env: Record<string, string> = {
-      PYTHONUTF8: "1",
-      PYTHONIOENCODING: "utf-8",
-      NO_COLOR: "1",
+      ...this.pythonCommandEnv(),
     };
     // Try connecting to official PyPI; if slow/unreachable, use Tsinghua mirror
     try {
@@ -939,12 +938,16 @@ export class NativeInstallStrategy implements InstallStrategy {
     log.push("Hermes venv not found; attempting best-effort repair.");
     const uv = await this.runLogged("uv", ["--version"], rootPath, log, 15_000).catch(() => undefined);
     if (uv?.exitCode === 0) {
-      const sync = await this.runLogged("uv", ["sync"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS).catch(() => undefined);
+      const sync = await this.runLogged("uv", ["sync"], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
+      }).catch(() => undefined);
       if (sync?.exitCode === 0 && await this.hasVenv(rootPath)) {
         log.push("Hermes venv repaired through uv sync.");
         return;
       }
-      const pip = await this.runLogged("uv", ["pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS).catch(() => undefined);
+      const pip = await this.runLogged("uv", ["pip", "install", "-e", "."], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
+      }).catch(() => undefined);
       if (pip?.exitCode === 0 && await this.hasVenv(rootPath)) {
         log.push("Hermes venv repaired through uv pip install -e .");
         return;
@@ -956,7 +959,9 @@ export class NativeInstallStrategy implements InstallStrategy {
       return;
     }
     const venvDir = path.join(rootPath, "venv");
-    const create = await this.runLogged(python.command, [...python.argsPrefix, "-m", "venv", venvDir], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS).catch(() => undefined);
+    const create = await this.runLogged(python.command, [...python.argsPrefix, "-m", "venv", venvDir], rootPath, log, DEFAULT_INSTALL_TIMEOUT_MS, {
+      env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
+    }).catch(() => undefined);
     if (create?.exitCode !== 0) {
       log.push("python -m venv failed; leaving source CLI as fallback.");
       return;
@@ -1292,15 +1297,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       const result = await runCommand(candidate.command, candidate.args, {
         cwd: rootPath,
         timeoutMs: 20_000,
-        env: {
-          PYTHONUTF8: "1",
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUNBUFFERED: "1",
-          PYTHONPATH: `${rootPath}${path.delimiter}${process.env.PYTHONPATH ?? ""}`,
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-          HERMES_HOME: hermesHome,
-        },
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath], hermesHome }),
       });
       const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
       log.push(`Install health via ${candidate.command}: ${output || `exit ${result.exitCode ?? "unknown"}`}`);
@@ -1349,6 +1346,7 @@ export class NativeInstallStrategy implements InstallStrategy {
       const result = await runCommand(python, ["-c", "import importlib.util; spec = importlib.util.find_spec('hermes'); print(spec.origin if spec else '')"], {
         cwd: rootPath,
         timeoutMs: 10_000,
+        env: this.pythonCommandEnv({ pythonPathEntries: [rootPath] }),
       }).catch(() => undefined);
       if (result?.exitCode === 0) {
         const origin = result.stdout.trim();
@@ -1565,11 +1563,57 @@ export class NativeInstallStrategy implements InstallStrategy {
     const withoutBom = raw.replace(/^﻿/, "");
     // 不再替换 Start-GatewayIfConfigured，保持官方脚本原样。Forge 通过 hermes gateway run --replace 接管。
     await fs.writeFile(scriptPath, `﻿${withoutBom}`, "utf8");
-    log.push("Official installer: preserved original script with UTF-8 BOM for Windows PowerShell 5.1 compatibility.");
+    log.push("Hermes installer: preserved original script with UTF-8 BOM for Windows PowerShell 5.1 compatibility.");
   }
 
   private samePath(left: string, right: string) {
     return path.resolve(left).replace(/[\\/]+$/, "").toLowerCase() === path.resolve(right).replace(/[\\/]+$/, "").toLowerCase();
+  }
+
+  private pythonCommandEnv(options: {
+    pythonPathEntries?: string[];
+    hermesHome?: string;
+    extra?: Record<string, string | undefined>;
+  } = {}): Record<string, string> {
+    const pythonPath = this.joinPythonPath([
+      ...(options.pythonPathEntries ?? []),
+      ...this.pythonSiteCustomizePaths(),
+      process.env.PYTHONPATH,
+    ]);
+    return {
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8:replace",
+      PYTHONUNBUFFERED: "1",
+      NO_COLOR: "1",
+      FORCE_COLOR: "0",
+      ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+      ...(options.hermesHome ? { HERMES_HOME: options.hermesHome } : {}),
+      ...Object.fromEntries(Object.entries(options.extra ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
+    };
+  }
+
+  private pythonSiteCustomizePaths() {
+    if (process.platform !== "win32") return [];
+    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+    return [
+      path.join(process.cwd(), "resources", "python-sitecustomize"),
+      resourcesPath ? path.join(resourcesPath, "python-sitecustomize") : undefined,
+    ].filter((candidate): candidate is string => Boolean(candidate));
+  }
+
+  private joinPythonPath(entries: Array<string | undefined>) {
+    const seen = new Set<string>();
+    return entries
+      .flatMap((entry) => (entry ?? "").split(path.delimiter))
+      .map((entry) => entry.trim())
+      .filter((entry) => {
+        if (!entry) return false;
+        const key = path.resolve(entry).toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .join(path.delimiter);
   }
 
   private errorCode(error: unknown) {

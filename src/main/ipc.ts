@@ -418,14 +418,16 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
 
   ipcMain.handle(IpcChannels.startTask, (_event, input) => {
     const parsed = startTaskInputSchema.parse(input);
-    console.info("[Hermes Trace]", {
-      layer: "main:task:start",
-      clientTaskId: parsed.clientTaskId,
-      taskType: parsed.taskType,
-      userInputLength: parsed.userInput.length,
-      workspacePath: parsed.workspacePath,
-      selectedFilesCount: parsed.selectedFiles.length,
-    });
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[Hermes Trace]", {
+        layer: "main:task:start",
+        clientTaskId: parsed.clientTaskId,
+        taskType: parsed.taskType,
+        userInputLength: parsed.userInput.length,
+        workspacePath: parsed.workspacePath,
+        selectedFilesCount: parsed.selectedFiles.length,
+      });
+    }
     return services.taskRunner.start(parsed);
   });
 
@@ -458,6 +460,9 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
     const parsed = workspacePathInputSchema.parse(workspacePath);
     const parsedSessionId = workSessionId ? sessionIdSchema.parse(workSessionId) : undefined;
     const workspaceId = services.appPaths.workspaceId(parsed);
+    if (parsedSessionId) {
+      return services.sessionLog.readRecentSessionRuns(workspaceId, parsedSessionId);
+    }
     return services.sessionLog.readRecent(workspaceId, 200, parsedSessionId);
   });
 

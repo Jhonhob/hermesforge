@@ -1128,6 +1128,7 @@ export type EngineRuntimeEnv = {
   sourceType?: ModelSourceType;
   baseUrl?: string;
   providerProfileId?: string;
+  contextWindow?: number;
   executionMode?: EngineExecutionMode;
   env: Record<string, string>;
 };
