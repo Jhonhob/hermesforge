@@ -67,4 +67,36 @@ print('__FORGE_EVENT__{"type": "usage", "source": "actual", "input_tokens": 123,
     });
   });
 
+  it("passes through camelCase token usage fields", async () => {
+    const script = `
+print('__FORGE_EVENT__{"type": "usage", "source": "actual", "inputTokens": 100, "outputTokens": 30, "totalTokens": 150, "promptTokens": 90, "completionTokens": 25, "cacheReadTokens": 10, "cacheWriteTokens": 5, "reasoningTokens": 20, "contextTokens": 1234, "contextWindow": 128000, "contextPercent": 1, "estimatedCostUsd": 0.01, "costSource": "provider", "session_id": "s1"}__FORGE_EVENT_END__')
+    `;
+    const proc = spawn("python", ["-c", script]);
+    const controller = new AbortController();
+    const events: Array<{ type: string; [key: string]: unknown }> = [];
+
+    for await (const event of readHermesJsonStream(proc, controller.signal)) {
+      events.push(event as { type: string; [key: string]: unknown });
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "usage",
+      source: "actual",
+      inputTokens: 100,
+      outputTokens: 30,
+      totalTokens: 150,
+      promptTokens: 90,
+      completionTokens: 25,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 5,
+      reasoningTokens: 20,
+      contextTokens: 1234,
+      contextWindow: 128000,
+      contextPercent: 1,
+      estimatedCostUsd: 0.01,
+      costSource: "provider",
+    });
+  });
+
 });

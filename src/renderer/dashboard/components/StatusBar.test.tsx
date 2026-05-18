@@ -108,6 +108,68 @@ describe("StatusBar", () => {
     expect(getHermesProbe).not.toHaveBeenCalled();
   });
 
+  it("suppresses stale Windows Control Bridge probe noise in Hermes detail", () => {
+    useAppStore.setState({
+      clientInfo: {
+        appVersion: "0.1.2",
+        userDataPath: "D:/temp",
+        portable: false,
+        rendererMode: "dev",
+      },
+      runtimeConfig: {
+        hermesRuntime: { mode: "windows", pythonCommand: "python", windowsAgentMode: "hermes_native", cliPermissionMode: "guarded", permissionPolicy: "bridge_guarded" },
+        modelProfiles: [],
+        updateSources: {},
+      } as any,
+      hermesProbe: {
+        checkedAt: "2026-05-18T10:00:00.000Z",
+        probe: {
+          engineId: "hermes",
+          checkedAt: "2026-05-18T10:00:00.000Z",
+          status: "healthy",
+          primaryMetric: "Windows Native",
+          secondaryMetric: "D:/Hermes",
+          metrics: [],
+          message: "Windows Control Bridge 不可达。",
+        },
+      },
+      hermesStatus: {
+        engine: {
+          engineId: "hermes",
+          label: "Hermes",
+          available: true,
+          mode: "cli",
+          message: "Hermes 已连接",
+        },
+        update: {
+          engineId: "hermes",
+          updateAvailable: false,
+          sourceConfigured: true,
+          message: "最新",
+        },
+        memory: {
+          engineId: "hermes",
+          workspaceId: "workspace",
+          usedCharacters: 100,
+          entries: 2,
+          message: "ok",
+        },
+      },
+    });
+
+    window.workbenchClient = {
+      ...window.workbenchClient,
+      getGatewayStatus: vi.fn(),
+      onClientUpdateEvent: vi.fn().mockReturnValue(() => undefined),
+    };
+
+    render(<StatusBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: /环境就绪/ }));
+    expect(screen.queryByText(/Windows Control Bridge/)).toBeNull();
+    expect(screen.getByTestId("status-light-hermes")).toHaveClass("hermes-status-light--ok");
+  });
+
   it("turns Hermes updates into a visible reminder summary", () => {
     useAppStore.setState({
       clientInfo: {

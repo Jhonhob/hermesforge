@@ -673,6 +673,33 @@ def _float_value(value, default: float = 0.0) -> float:
         return default
 
 
+def _agent_session_usage(agent) -> dict:
+    def g(primary: str, fallback: str | None = None) -> int:
+        value = _int_value(getattr(agent, primary, 0))
+        if value or not fallback:
+            return value
+        return _int_value(getattr(agent, fallback, 0))
+
+    input_tokens = g("session_input_tokens", "session_prompt_tokens")
+    output_tokens = g("session_output_tokens", "session_completion_tokens")
+    prompt_tokens = g("session_prompt_tokens", "session_input_tokens")
+    completion_tokens = g("session_completion_tokens", "session_output_tokens")
+    total_tokens = g("session_total_tokens")
+    if not total_tokens:
+        total_tokens = input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "cache_read_tokens": g("session_cache_read_tokens"),
+        "cache_write_tokens": g("session_cache_write_tokens"),
+        "reasoning_tokens": g("session_reasoning_tokens"),
+        "api_calls": g("session_api_calls"),
+    }
+
+
 def _usage_sources(result, agent) -> list[dict]:
     sources: list[dict] = []
     if isinstance(result, dict):
@@ -688,7 +715,25 @@ def _usage_sources(result, agent) -> list[dict]:
         value = getattr(agent, attr, None)
         if isinstance(value, dict):
             sources.append(value)
+    session_usage = _agent_session_usage(agent)
+    if any(session_usage.get(key, 0) for key in ("input_tokens", "output_tokens", "total_tokens", "prompt_tokens", "completion_tokens")):
+        sources.append(session_usage)
     return sources
+
+
+def _agent_context_usage(agent) -> dict:
+    compressor = getattr(agent, "context_compressor", None)
+    context_tokens = _int_value(getattr(compressor, "last_prompt_tokens", 0) if compressor else 0)
+    context_window = _int_value(getattr(compressor, "context_length", 0) if compressor else 0)
+    context_percent = 0
+    if context_tokens and context_window:
+        context_percent = max(0, min(100, round((context_tokens / context_window) * 100)))
+    return {
+        "context_tokens": context_tokens,
+        "context_window": context_window,
+        "context_percent": context_percent,
+        "api_calls": _int_value(getattr(agent, "session_api_calls", 0)),
+    }
 
 
 def _first_int_from_sources(sources: list[dict], *keys: str, default: int = 0) -> int:
@@ -698,6 +743,14 @@ def _first_int_from_sources(sources: list[dict], *keys: str, default: int = 0) -
                 value = _int_value(source.get(key))
                 if value:
                     return value
+        for key, value in source.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            for wanted in keys:
+                wanted_normalized = re.sub(r"[^a-z0-9]", "", wanted.lower())
+                if normalized == wanted_normalized and value is not None:
+                    parsed = _int_value(value)
+                    if parsed:
+                        return parsed
     return default
 
 
@@ -708,6 +761,14 @@ def _first_float_from_sources(sources: list[dict], *keys: str, default: float = 
                 value = _float_value(source.get(key))
                 if value:
                     return value
+        for key, value in source.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            for wanted in keys:
+                wanted_normalized = re.sub(r"[^a-z0-9]", "", wanted.lower())
+                if normalized == wanted_normalized and value is not None:
+                    parsed = _float_value(value)
+                    if parsed:
+                        return parsed
     return default
 
 
@@ -803,6 +864,14 @@ def main() -> int:
             user_message,
             args.session_id,
         )
+        prompt_estimate = sum(_message_tokens(item) for item in conversation_history) + _estimate_tokens(str(user_message)) + 16
+        emit("usage", {
+            "source": "estimated",
+            "input_tokens": prompt_estimate,
+            "output_tokens": 0,
+            "total_tokens": prompt_estimate,
+            "session_id": args.session_id,
+        })
         result = agent.run_conversation(
             user_message,
             conversation_history=conversation_history,
@@ -835,20 +904,28 @@ def main() -> int:
         final_messages = result.get("messages", []) if isinstance(result, dict) else []
         usage_sources = _usage_sources(result, agent)
         if usage_sources:
-            input_tokens = _first_int_from_sources(usage_sources, "input_tokens", "prompt_tokens", "input", "prompt")
-            output_tokens = _first_int_from_sources(usage_sources, "output_tokens", "completion_tokens", "output", "completion")
-            total_tokens = _first_int_from_sources(usage_sources, "total_tokens", "total", default=input_tokens + output_tokens)
+            input_tokens = _first_int_from_sources(usage_sources, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "promptTokenCount", "input", "prompt")
+            output_tokens = _first_int_from_sources(usage_sources, "output_tokens", "outputTokens", "completion_tokens", "completionTokens", "completionTokenCount", "output", "completion")
+            total_tokens = _first_int_from_sources(usage_sources, "total_tokens", "totalTokens", "totalTokenCount", "total", default=input_tokens + output_tokens)
             if input_tokens or output_tokens or total_tokens:
+                context_usage = _agent_context_usage(agent)
+                context_tokens = _first_int_from_sources(usage_sources, "context_tokens", "contextTokens", "last_prompt_tokens", "lastPromptTokens", default=context_usage["context_tokens"])
+                context_window = _first_int_from_sources(usage_sources, "context_window", "contextWindow", "context_length", "contextLength", default=context_usage["context_window"])
+                context_percent = _first_int_from_sources(usage_sources, "context_percent", "contextPercent", default=context_usage["context_percent"])
                 emit("usage", {
                     "source": "actual",
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "total_tokens": total_tokens,
-                    "prompt_tokens": _first_int_from_sources(usage_sources, "prompt_tokens"),
-                    "completion_tokens": _first_int_from_sources(usage_sources, "completion_tokens"),
-                    "cache_read_tokens": _first_int_from_sources(usage_sources, "cache_read_tokens", "cache_read"),
-                    "cache_write_tokens": _first_int_from_sources(usage_sources, "cache_write_tokens", "cache_write"),
-                    "reasoning_tokens": _first_int_from_sources(usage_sources, "reasoning_tokens", "reasoning"),
+                    "prompt_tokens": _first_int_from_sources(usage_sources, "prompt_tokens", "promptTokens", "promptTokenCount"),
+                    "completion_tokens": _first_int_from_sources(usage_sources, "completion_tokens", "completionTokens", "completionTokenCount"),
+                    "cache_read_tokens": _first_int_from_sources(usage_sources, "cache_read_tokens", "cacheReadTokens", "cache_read"),
+                    "cache_write_tokens": _first_int_from_sources(usage_sources, "cache_write_tokens", "cacheWriteTokens", "cache_write"),
+                    "reasoning_tokens": _first_int_from_sources(usage_sources, "reasoning_tokens", "reasoningTokens", "reasoning"),
+                    "context_tokens": context_tokens,
+                    "context_window": context_window,
+                    "context_percent": context_percent,
+                    "api_calls": context_usage["api_calls"],
                     "estimated_cost_usd": _first_float_from_sources(usage_sources, "estimated_cost_usd", "cost_usd", "cost"),
                     "cost_source": usage_sources[0].get("cost_source"),
                     "session_id": args.session_id,

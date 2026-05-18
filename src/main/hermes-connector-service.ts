@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AppPaths } from "./app-paths";
-import { resolveActiveHermesHome } from "./hermes-home";
+import { ensureHermesHomeLayout, resolveActiveHermesHome } from "./hermes-home";
 import { runCommand } from "../process/command-runner";
 import type { RuntimeAdapterFactory } from "../runtime/runtime-adapter";
 import { validateWslHermesCli } from "../runtime/hermes-cli-resolver";
@@ -35,10 +35,15 @@ type StoredPlatformConfig = {
   secretRefs?: Record<string, string>;
   updatedAt?: string;
   lastSyncedAt?: string;
+  instances?: Record<string, StoredFeishuInstanceConfig>;
 };
 
 type StoredConnectorConfig = {
   platforms?: Partial<Record<HermesConnectorPlatformId, StoredPlatformConfig>>;
+};
+
+type StoredFeishuInstanceConfig = Omit<StoredPlatformConfig, "instances"> & {
+  instanceId?: string;
 };
 
 type WeixinQrEvent =
@@ -160,11 +165,12 @@ const PLATFORM_REGISTRY: HermesConnectorPlatform[] = [
     text("botOpenId", "FEISHU_BOT_OPEN_ID", "Bot Open ID", false, "ou_xxx"),
     text("botUserId", "FEISHU_BOT_USER_ID", "Bot User ID", false),
     text("botName", "FEISHU_BOT_NAME", "Bot 名称", false),
+    text("agentId", "HERMES_AGENT_ID", "绑定 Agent", false, "default / agent-id"),
     password("encryptKey", "FEISHU_ENCRYPT_KEY", "Webhook Encrypt Key", false),
     password("verificationToken", "FEISHU_VERIFICATION_TOKEN", "Webhook Verification Token", false),
     text("agentMapping", "FEISHU_AGENT_MAPPING", "Hermes Agent 映射", false, "agent-a=cli_xxx,agent-b=cli_yyy"),
     text("homeChannel", "FEISHU_HOME_CHANNEL", "Home Channel", false),
-  ], ["对齐 `hermes gateway setup`：App ID / App Secret + WebSocket 为默认推荐。", "私聊默认走配对审批：FEISHU_ALLOW_ALL_USERS=false；群聊默认 open 且需要 @ 机器人。", "Hermes 官方飞书适配器当前仍是单机器人模式；Agent 映射字段会写入 .env，供后续多实例/自定义路由使用。"]),
+  ], ["对齐 `hermes gateway setup`：App ID / App Secret + WebSocket 为默认推荐。", "私聊默认走配对审批：FEISHU_ALLOW_ALL_USERS=false；群聊默认 open 且需要 @ 机器人。", "每个飞书实例会隔离启动独立 Gateway；绑定 Agent 后使用对应 Hermes profile 的技能/记忆。"]),
   platform("homeassistant", "Home Assistant", "official", "Home Assistant Assist pipeline 集成。", [
     url("url", "HASS_URL", "Home Assistant URL", true, "http://homeassistant.local:8123"),
     password("token", "HASS_TOKEN", "Long-Lived Access Token", true),
@@ -218,6 +224,8 @@ const PLATFORM_REGISTRY: HermesConnectorPlatform[] = [
 
 export class HermesConnectorService {
   private gatewayProcess?: ChildProcessWithoutNullStreams;
+  private readonly feishuGatewayProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+  private readonly feishuGatewayStartedAt = new Map<string, string>();
   private gatewayStartedAt?: string;
   private gatewayOutput = "";
   private gatewayError = "";
@@ -254,14 +262,32 @@ export class HermesConnectorService {
       this.readEnvValues(),
       this.status(),
     ]);
-    const connectors = await Promise.all(PLATFORM_REGISTRY.map((platform) => this.toConnector(platform, stored, envValues, gateway)));
+    const connectors: HermesConnectorConfig[] = [];
+    for (const platform of PLATFORM_REGISTRY) {
+      if (platform.id !== "feishu") {
+        connectors.push(await this.toConnector(platform, stored, envValues, gateway));
+        continue;
+      }
+      const instances = this.feishuInstances(stored.platforms?.feishu);
+      if (instances.length === 0) {
+        connectors.push(await this.toConnector(platform, stored, envValues, gateway, "default"));
+      } else {
+        for (const [instanceId, instance] of instances) {
+          connectors.push(await this.toConnector(platform, stored, envValues, gateway, instanceId, instance));
+        }
+      }
+    }
     return { connectors, gateway, envPath: await this.envPath() };
   }
 
   async save(input: HermesConnectorSaveInput): Promise<HermesConnectorConfig> {
     const platform = platformById(input.platformId);
     const stored = await this.readConfig();
-    const current = stored.platforms?.[platform.id] ?? {};
+    const instanceId = platform.id === "feishu" ? normalizeFeishuInstanceId(input.instanceId) : undefined;
+    const current: StoredPlatformConfig = platform.id === "feishu"
+      ? this.feishuInstanceConfig(stored.platforms?.feishu, instanceId ?? "default")
+        ?? {}
+      : stored.platforms?.[platform.id] ?? {};
     const values: Record<string, string | boolean> = { ...(current.values ?? {}) };
     const secretRefs: Record<string, string> = { ...(current.secretRefs ?? {}) };
 
@@ -270,7 +296,7 @@ export class HermesConnectorService {
       const rawValue = input.values[field.key];
       if (field.secret) {
         if (typeof rawValue === "string" && rawValue.trim()) {
-          const ref = secretRef(platform.id, field.key);
+          const ref = secretRef(platform.id, field.key, instanceId);
           await this.secretVault.saveSecret(ref, rawValue.trim());
           secretRefs[field.key] = ref;
         }
@@ -293,25 +319,44 @@ export class HermesConnectorService {
       lastSyncedAt: current.lastSyncedAt,
     };
     stored.platforms ??= {};
-    stored.platforms[platform.id] = next;
+    if (platform.id === "feishu") {
+      const feishu = this.ensureFeishuInstances(stored.platforms.feishu);
+      feishu.instances![instanceId ?? "default"] = next;
+      stored.platforms.feishu = feishu;
+    } else {
+      stored.platforms[platform.id] = next;
+    }
     await this.writeConfig(stored);
 
     const envValues = await this.readEnvValues();
-    return this.toConnector(platform, stored, envValues, await this.status());
+    return this.toConnector(platform, stored, envValues, await this.status(), instanceId);
   }
 
-  async disable(platformId: HermesConnectorPlatformId) {
+  async disable(input: HermesConnectorPlatformId | { platformId: HermesConnectorPlatformId; instanceId?: string }) {
+    const platformId = typeof input === "string" ? input : input.platformId;
     const platform = platformById(platformId);
+    const instanceId = platform.id === "feishu" ? normalizeFeishuInstanceId(typeof input === "string" ? undefined : input.instanceId) : undefined;
     const stored = await this.readConfig();
     stored.platforms ??= {};
-    stored.platforms[platform.id] = {
-      ...(stored.platforms[platform.id] ?? {}),
-      enabled: false,
-      updatedAt: new Date().toISOString(),
-    };
+    if (platform.id === "feishu") {
+      const feishu = this.ensureFeishuInstances(stored.platforms.feishu);
+      const current = feishu.instances![instanceId ?? "default"] ?? {};
+      feishu.instances![instanceId ?? "default"] = {
+        ...current,
+        enabled: false,
+        updatedAt: new Date().toISOString(),
+      };
+      stored.platforms.feishu = feishu;
+    } else {
+      stored.platforms[platform.id] = {
+        ...(stored.platforms[platform.id] ?? {}),
+        enabled: false,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     await this.writeConfig(stored);
     const envValues = await this.readEnvValues();
-    return this.toConnector(platform, stored, envValues, await this.status());
+    return this.toConnector(platform, stored, envValues, await this.status(), instanceId);
   }
 
   async syncEnv(): Promise<{ ok: boolean; envPath: string; message: string; connectors: HermesConnectorConfig[] }> {
@@ -322,9 +367,24 @@ export class HermesConnectorService {
     ];
     const syncedAt = new Date().toISOString();
 
+    const feishuInstanceIds: string[] = [];
     for (const platform of PLATFORM_REGISTRY) {
       const config = stored.platforms?.[platform.id];
       if (!config || config.enabled === false) continue;
+      if (platform.id === "feishu") {
+        for (const [instanceId, instance] of this.feishuInstances(config)) {
+          if (instance.enabled === false) continue;
+          const missing = await this.missingRequired(platform, instance, {});
+          if (missing.length > 0) continue;
+          const envLines = await this.envLinesFor(platform, instance);
+          if (envLines.length === 0) continue;
+          await this.writeFeishuInstanceEnv(instanceId, instance, envLines);
+          instance.lastSyncedAt = syncedAt;
+          feishuInstanceIds.push(instanceId);
+        }
+        stored.platforms!.feishu = this.ensureFeishuInstances(config);
+        continue;
+      }
       const missing = await this.missingRequired(platform, config, {});
       if (missing.length > 0) continue;
       const envLines = await this.envLinesFor(platform, config);
@@ -338,12 +398,13 @@ export class HermesConnectorService {
     const existing = await fs.readFile(envPath, "utf8").catch(() => "");
     await this.backupEnv(envPath, existing);
     const withoutBlock = removeManagedBlock(existing).trimEnd();
-    const hasAnyConnector = lines.some((line) => line.includes("="));
+    const hasAnyConnector = lines.some((line) => line.includes("=")) || feishuInstanceIds.length > 0;
     const next = hasAnyConnector
       ? `${withoutBlock ? `${withoutBlock}\n\n` : ""}${lines.join("\n")}\n`
       : `${withoutBlock}${withoutBlock ? "\n" : ""}`;
     await fs.mkdir(path.dirname(envPath), { recursive: true });
     await fs.writeFile(envPath, next, "utf8");
+    await this.pruneStaleFeishuInstanceHomes(feishuInstanceIds);
     await fs.chmod(envPath, 0o600).catch((error) => {
       console.warn("[Hermes Forge] Failed to apply strict permissions to connector .env:", error);
     });
@@ -358,7 +419,7 @@ export class HermesConnectorService {
   }
 
   async status(): Promise<HermesGatewayStatus> {
-    const managedRunning = Boolean(this.gatewayProcess && !this.gatewayProcess.killed);
+    const managedRunning = Boolean(this.gatewayProcess && !this.gatewayProcess.killed) || [...this.feishuGatewayProcesses.values()].some((child) => !child.killed);
     const [cliStatus, stateStatus] = await Promise.all([
       this.gatewayCliStatus().catch(() => undefined),
       this.gatewayStateStatus().catch(() => undefined),
@@ -384,8 +445,8 @@ export class HermesConnectorService {
       lastExitAt: this.gatewayLastExitAt,
       restartCount: this.gatewayRestartCount,
       backoffUntil: this.gatewayBackoffUntil,
-      pid: managedRunning ? this.gatewayProcess?.pid : stateStatus?.pid,
-      startedAt: managedRunning ? this.gatewayStartedAt : stateStatus?.updatedAt,
+      pid: this.gatewayProcess?.pid ?? [...this.feishuGatewayProcesses.values()].find((child) => child.pid)?.pid ?? stateStatus?.pid,
+      startedAt: this.gatewayStartedAt ?? this.feishuGatewayStartedAt.values().next().value ?? stateStatus?.updatedAt,
       command: managedRunning || stateRunning ? "Hermes Python gateway run" : undefined,
       message: managedRunning
         ? "Gateway 正由桌面端托管运行。"
@@ -466,9 +527,17 @@ export class HermesConnectorService {
     }
     const current = await this.status();
     if (current.running && !options.forceReplace) {
-      this.gatewayAutoStartState = "running";
-      this.gatewayAutoStartMessage = "Gateway 已在运行。";
-      return { ok: true, status: current, message: "Gateway 已在运行。" };
+      const stored = await this.readConfig().catch(() => ({ platforms: {} }));
+      const readyFeishuInstances = await this.configuredFeishuInstances(stored).catch(() => []);
+      const hasMissingFeishuInstance = readyFeishuInstances.some(([instanceId]) => {
+        const key = feishuRuntimeKey(instanceId);
+        return current.platformStates?.[key]?.toLowerCase() !== "connected" && !this.feishuGatewayProcesses.has(normalizeFeishuInstanceId(instanceId));
+      });
+      if (!hasMissingFeishuInstance) {
+        this.gatewayAutoStartState = "running";
+        this.gatewayAutoStartMessage = "Gateway 已在运行。";
+        return { ok: true, status: current, message: "Gateway 已在运行。" };
+      }
     }
     if (options.forceReplace) {
       this.gatewayBackoffUntil = undefined;
@@ -479,6 +548,14 @@ export class HermesConnectorService {
         });
         this.gatewayUserStopped = false;
       }
+      for (const [instanceId, child] of this.feishuGatewayProcesses) {
+        if (!child.pid) continue;
+        await killProcessTree(child.pid).catch((error) => {
+          console.warn(`[Hermes Forge] Failed to stop existing Feishu Gateway ${instanceId} before replace:`, error);
+        });
+      }
+      this.feishuGatewayProcesses.clear();
+      this.feishuGatewayStartedAt.clear();
     }
     if (this.gatewayBackoffUntil && Date.parse(this.gatewayBackoffUntil) > Date.now()) {
       return {
@@ -533,7 +610,13 @@ export class HermesConnectorService {
       };
     }
     await this.clearGatewayRuntimeMarkers();
+    await this.syncEnv().catch(() => undefined);
+    const stored = await this.readConfig();
     const hermesEnv = await this.readEnvValues();
+    const feishuInstances = await this.configuredFeishuInstances(stored);
+    const hasNonFeishuConnector = await this.hasConfiguredNonFeishuConnector(stored, hermesEnv);
+    let mainStarted = false;
+    if (hasNonFeishuConnector) {
     const launch = await this.gatewayLaunchFromRuntime(runtime, hermesEnv);
     console.info("[Hermes Forge] Gateway launch", {
       command: launch.command,
@@ -580,13 +663,33 @@ export class HermesConnectorService {
         message: status.lastError || status.message || "Gateway 启动失败。",
       };
     }
+      mainStarted = true;
+    }
+    for (const [instanceId, instance] of feishuInstances) {
+      await this.startFeishuGatewayInstance(runtime, instanceId, instance);
+    }
+    if (!mainStarted && feishuInstances.length === 0) {
+      this.gatewayAutoStartState = "failed";
+      this.gatewayAutoStartMessage = "没有完整可启动的连接器。";
+      return {
+        ok: false,
+        status: await this.status(),
+        message: "没有完整可启动的连接器。",
+      };
+    }
+    const status = await this.status();
+    if (!status.running) {
+      this.gatewayAutoStartState = "failed";
+      this.gatewayAutoStartMessage = status.lastError || status.message || "Gateway 启动失败。";
+      return { ok: false, status, message: status.lastError || status.message || "Gateway 启动失败。" };
+    }
     this.gatewayAutoStartState = "running";
     this.gatewayAutoStartMessage = "Gateway 已自动启动。";
     return { ok: true, status, message: status.managedRunning ? "Gateway 已启动。" : "Gateway 已可用。" };
   }
 
   async stop(): Promise<HermesGatewayActionResult> {
-    if (!this.gatewayProcess?.pid) {
+    if (!this.gatewayProcess?.pid && this.feishuGatewayProcesses.size === 0) {
       return { ok: true, status: await this.status(), message: "没有桌面端托管的 Gateway 进程。" };
     }
     this.gatewayUserStopped = true;
@@ -594,8 +697,19 @@ export class HermesConnectorService {
       clearTimeout(this.gatewayAutoRestartTimer);
       this.gatewayAutoRestartTimer = undefined;
     }
-    await killProcessTree(this.gatewayProcess.pid);
-    this.gatewayProcess = undefined;
+    if (this.gatewayProcess?.pid) {
+      await killProcessTree(this.gatewayProcess.pid);
+      this.gatewayProcess = undefined;
+    }
+    for (const [instanceId, child] of this.feishuGatewayProcesses) {
+      if (child.pid) {
+        await killProcessTree(child.pid).catch((error) => {
+          console.warn(`[Hermes Forge] Failed to stop Feishu Gateway ${instanceId}:`, error);
+        });
+      }
+    }
+    this.feishuGatewayProcesses.clear();
+    this.feishuGatewayStartedAt.clear();
     this.gatewayStartedAt = undefined;
     this.gatewayLastExitCode = 0;
     this.gatewayLastExitAt = new Date().toISOString();
@@ -647,12 +761,20 @@ export class HermesConnectorService {
     this.gatewayAutoStartMessage = "正在检查连接器并准备自动启动...";
     const stored = await this.readConfig();
     const envValues = await this.readEnvValues();
+    const readyFeishuInstances = await this.configuredFeishuInstances(stored);
     const enabledPlatforms = PLATFORM_REGISTRY
       .map((platform) => ({ platform, config: stored.platforms?.[platform.id] }))
-      .filter((item) => item.config && item.config.enabled !== false);
-    if (enabledPlatforms.length === 0) {
+      .filter((item) => item.platform.id !== "feishu" && item.config && item.config.enabled !== false);
+    if (enabledPlatforms.length === 0 && readyFeishuInstances.length === 0) {
       this.gatewayAutoStartState = "idle";
       this.gatewayAutoStartMessage = "没有已启用的连接器，已跳过自动启动。";
+      return;
+    }
+    if (readyFeishuInstances.length > 0) {
+      await this.syncEnv().catch(() => undefined);
+      const result = await this.start();
+      this.gatewayAutoStartState = result.ok ? "running" : "failed";
+      this.gatewayAutoStartMessage = result.message;
       return;
     }
     for (const item of enabledPlatforms) {
@@ -1241,8 +1363,12 @@ export class HermesConnectorService {
     stored: StoredConnectorConfig,
     envValues: Record<string, string>,
     gateway: HermesGatewayStatus,
+    instanceId?: string,
+    instanceConfig?: StoredPlatformConfig,
   ): Promise<HermesConnectorConfig> {
-    const saved = stored.platforms?.[platform.id];
+    const saved = platform.id === "feishu"
+      ? instanceConfig ?? this.feishuInstanceConfig(stored.platforms?.feishu, normalizeFeishuInstanceId(instanceId))
+      : stored.platforms?.[platform.id];
     const enabled = saved?.enabled !== false;
     const values: Record<string, string | boolean> = {};
     const secretRefs: Record<string, string> = {};
@@ -1273,9 +1399,15 @@ export class HermesConnectorService {
     const missingRequired = await this.missingRequired(platform, saved, envValues);
     const configured = await this.hasConfigurationSignal(platform, saved, envValues) && missingRequired.length === 0;
     const status = connectorStatus(enabled, configured);
-    const runtimeStatus = connectorRuntimeStatus(platform.id, enabled, configured, gateway);
+    const runtimeKey = platform.id === "feishu" ? feishuRuntimeKey(normalizeFeishuInstanceId(instanceId)) : platform.id;
+    const runtimeStatus = connectorRuntimeStatus(runtimeKey, enabled, configured, gateway);
+    const connectorInstanceId = platform.id === "feishu" ? normalizeFeishuInstanceId(instanceId) : undefined;
+    const connectorAgentId = platform.id === "feishu" ? stringValue(values.agentId) || "default" : undefined;
     return {
       platform,
+      instanceId: connectorInstanceId,
+      instanceLabel: platform.id === "feishu" ? feishuInstanceLabel(connectorInstanceId, values) : undefined,
+      agentId: connectorAgentId,
       status,
       runtimeStatus,
       enabled,
@@ -1478,10 +1610,10 @@ export class HermesConnectorService {
       : { ok: false, message: `Gateway 启动前 Hermes 版本检查失败，请检查安装是否完整。` };
   }
 
-  private async gatewayLaunchFromRuntime(runtime: Extract<ConnectorRuntimeContext, { ok: true }>, hermesEnv: Record<string, string>) {
+  private async gatewayLaunchFromRuntime(runtime: Extract<ConnectorRuntimeContext, { ok: true }>, hermesEnv: Record<string, string>, hermesHomeOverride?: string) {
     const runtimeRoot = runtime.adapter.toRuntimePath(runtime.root);
     const cliPath = runtime.runtime.mode === "wsl" ? `${runtimeRoot.replace(/\/+$/, "")}/hermes` : this.hermesCliPath(runtime.root);
-    const runtimeHermesHome = runtime.adapter.toRuntimePath(await this.activeHermesHome());
+    const runtimeHermesHome = runtime.adapter.toRuntimePath(hermesHomeOverride ?? await this.activeHermesHome());
     const launch = await runtime.adapter.buildHermesLaunch({
       runtime: runtime.runtime,
       rootPath: runtimeRoot,
@@ -1496,6 +1628,62 @@ export class HermesConnectorService {
       env: launch.env,
       label: launch.diagnostics.label,
     };
+  }
+
+  private async startFeishuGatewayInstance(
+    runtime: Extract<ConnectorRuntimeContext, { ok: true }>,
+    instanceId: string,
+    instance: StoredPlatformConfig,
+  ) {
+    const normalizedId = normalizeFeishuInstanceId(instanceId);
+    const existing = this.feishuGatewayProcesses.get(normalizedId);
+    if (existing && !existing.killed) return;
+    const agent = await this.feishuAgentHome(instance, { create: true });
+    const instanceHome = await this.feishuInstanceHome(normalizedId, instance, { create: true });
+    await this.prepareFeishuInstanceRuntimeHome(instanceHome, agent.home);
+    const envValues = await this.readEnvValuesFromPath(await this.feishuInstanceEnvPath(normalizedId, instance));
+    const activeEnv = await this.readEnvValues();
+    const agentEnv = await this.readEnvValuesFromPath(path.join(agent.home, ".env"));
+    const launch = await this.gatewayLaunchFromRuntime(runtime, { ...activeEnv, ...agentEnv, ...envValues }, instanceHome);
+    console.info("[Hermes Forge] Feishu Gateway launch", {
+      instanceId: normalizedId,
+      agentProfile: agent.profileId,
+      command: launch.command,
+      args: launch.args,
+      cwd: launch.cwd,
+      label: launch.label,
+    });
+    const child = spawn(launch.command, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env,
+      windowsHide: true,
+      shell: false,
+    });
+    this.feishuGatewayProcesses.set(normalizedId, child);
+    this.feishuGatewayStartedAt.set(normalizedId, new Date().toISOString());
+    child.stdout.on("data", (chunk: Buffer) => {
+      this.gatewayOutput = trimLog(`${this.gatewayOutput}\n[${feishuRuntimeKey(normalizedId)}] ${chunk.toString("utf8")}`);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      this.gatewayError = trimLog(`${this.gatewayError}\n[${feishuRuntimeKey(normalizedId)}] ${chunk.toString("utf8")}`);
+    });
+    child.on("error", (error) => {
+      this.gatewayError = trimLog(`${this.gatewayError}\n[${feishuRuntimeKey(normalizedId)}] ${error.message}`);
+    });
+    child.on("close", (exitCode) => {
+      if (this.feishuGatewayProcesses.get(normalizedId) !== child) return;
+      this.gatewayLastExitCode = exitCode;
+      this.gatewayLastExitAt = new Date().toISOString();
+      this.feishuGatewayProcesses.delete(normalizedId);
+      this.feishuGatewayStartedAt.delete(normalizedId);
+      if ((exitCode ?? 0) !== 0) {
+        this.gatewayRestartCount += 1;
+        this.gatewayBackoffUntil = new Date(Date.now() + 5_000).toISOString();
+        this.gatewayAutoStartState = "failed";
+        this.gatewayAutoStartMessage = `${feishuRuntimeKey(normalizedId)} Gateway 已退出，退出码：${exitCode ?? "unknown"}`;
+      }
+    });
+    await this.sleep(1200);
   }
 
   private async legacyGatewayLaunch(root: string, hermesEnv: Record<string, string>, reason: string) {
@@ -1727,9 +1915,21 @@ export class HermesConnectorService {
   }
 
   private async gatewayStateStatus(): Promise<GatewayStateSnapshot | undefined> {
+    const snapshots: GatewayStateSnapshot[] = [];
     const raw = await fs.readFile(path.join(await this.activeHermesHome(), "gateway_state.json"), "utf8").catch(() => "");
-    if (!raw.trim()) return undefined;
-    return parseGatewayStateSnapshot(raw, isPidAlive);
+    if (raw.trim()) {
+      const parsed = parseGatewayStateSnapshot(raw, isPidAlive);
+      if (parsed) snapshots.push(parsed);
+    }
+    const stored = await this.readConfig().catch(() => ({ platforms: {} } as StoredConnectorConfig));
+    for (const [instanceId, instance] of this.feishuInstances(stored.platforms?.feishu)) {
+      const instanceHome = await this.feishuInstanceHome(instanceId, instance);
+      const instanceRaw = await fs.readFile(path.join(instanceHome, "gateway_state.json"), "utf8").catch(() => "");
+      if (!instanceRaw.trim()) continue;
+      const parsed = parseGatewayStateSnapshot(instanceRaw, isPidAlive, feishuRuntimeKey(instanceId));
+      if (parsed) snapshots.push(parsed);
+    }
+    return mergeGatewayStateSnapshots(snapshots);
   }
 
   private sleep(ms: number) {
@@ -1740,8 +1940,85 @@ export class HermesConnectorService {
     return await resolveActiveHermesHome(this.appPaths.hermesDir());
   }
 
+  private baseHermesHome() {
+    return this.appPaths.hermesDir();
+  }
+
   private async envPath() {
     return path.join(await this.activeHermesHome(), ".env");
+  }
+
+  private async feishuAgentHome(config: StoredPlatformConfig | undefined, options: { create?: boolean } = {}) {
+    const base = this.baseHermesHome();
+    const profileId = normalizeHermesProfileId(stringValue(config?.values?.agentId));
+    const home = profileId === "default" ? base : path.join(base, "profiles", profileId);
+    if (options.create) {
+      await ensureHermesHomeLayout(home);
+    }
+    return { profileId, home };
+  }
+
+  private async feishuInstanceHome(instanceId: string, config?: StoredPlatformConfig, options: { create?: boolean } = {}) {
+    const agent = await this.feishuAgentHome(config, options);
+    return path.join(agent.home, "connector-instances", "feishu", normalizeFeishuInstanceId(instanceId));
+  }
+
+  private async feishuInstanceEnvPath(instanceId: string, config?: StoredPlatformConfig) {
+    return path.join(await this.feishuInstanceHome(instanceId, config), ".env");
+  }
+
+  private async writeFeishuInstanceEnv(instanceId: string, config: StoredPlatformConfig, envLines: string[]) {
+    const agent = await this.feishuAgentHome(config, { create: true });
+    const instanceHome = await this.feishuInstanceHome(instanceId, config, { create: true });
+    await this.prepareFeishuInstanceRuntimeHome(instanceHome, agent.home);
+    const envPath = path.join(instanceHome, ".env");
+    await fs.mkdir(path.dirname(envPath), { recursive: true });
+    const lines = [
+      MANAGED_START,
+      "# Managed by Hermes Desktop. This file is isolated for one Feishu bot instance.",
+      `HERMES_CONNECTOR_INSTANCE_ID=${quoteEnv(feishuRuntimeKey(instanceId))}`,
+      `HERMES_AGENT_PROFILE=${quoteEnv(agent.profileId)}`,
+      ...envLines,
+      MANAGED_END,
+    ];
+    await fs.writeFile(envPath, `${lines.join("\n")}\n`, "utf8");
+    await fs.chmod(envPath, 0o600).catch(() => undefined);
+  }
+
+  private async prepareFeishuInstanceRuntimeHome(instanceHome: string, agentHome: string) {
+    await fs.mkdir(instanceHome, { recursive: true });
+    await Promise.all(["skills", "memories", "skins"].map((name) => this.ensureProfileDirectoryLink(path.join(agentHome, name), path.join(instanceHome, name))));
+    await Promise.all(["config.yaml", "SOUL.md", "auth.json"].map((name) => this.ensureProfileFileLink(path.join(agentHome, name), path.join(instanceHome, name))));
+  }
+
+  private async ensureProfileDirectoryLink(source: string, target: string) {
+    await fs.mkdir(source, { recursive: true });
+    const existing = await fs.lstat(target).catch(() => undefined);
+    if (existing) return;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.symlink(source, target, process.platform === "win32" ? "junction" : "dir").catch(async () => {
+      await fs.cp(source, target, { recursive: true, force: false }).catch(() => undefined);
+    });
+  }
+
+  private async ensureProfileFileLink(source: string, target: string) {
+    const stat = await fs.stat(source).catch(() => undefined);
+    if (!stat?.isFile()) return;
+    const existing = await fs.lstat(target).catch(() => undefined);
+    if (existing) return;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.symlink(source, target, "file").catch(async () => {
+      await fs.copyFile(source, target).catch(() => undefined);
+    });
+  }
+
+  private async pruneStaleFeishuInstanceHomes(activeInstanceIds: string[]) {
+    const root = path.join(await this.activeHermesHome(), "connector-instances", "feishu");
+    const keep = new Set(activeInstanceIds.map((id) => normalizeFeishuInstanceId(id)));
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+    await Promise.all(entries
+      .filter((entry) => entry.isDirectory() && !keep.has(entry.name))
+      .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => undefined)));
   }
 
   private hermesCliPath(root: string) {
@@ -1773,7 +2050,7 @@ export class HermesConnectorService {
     if (!raw) return { platforms: {} };
     try {
       const parsed = JSON.parse(raw) as StoredConnectorConfig;
-      return { platforms: parsed.platforms ?? {} };
+      return { platforms: migrateConnectorConfig(parsed.platforms ?? {}) };
     } catch {
       return { platforms: {} };
     }
@@ -1784,8 +2061,53 @@ export class HermesConnectorService {
     await fs.writeFile(this.configPath(), JSON.stringify(config, null, 2), "utf8");
   }
 
+  private ensureFeishuInstances(config: StoredPlatformConfig | undefined): StoredPlatformConfig {
+    const migrated = migrateFeishuPlatformConfig(config);
+    return {
+      ...migrated,
+      enabled: true,
+      instances: migrated.instances ?? {},
+    };
+  }
+
+  private feishuInstances(config: StoredPlatformConfig | undefined): Array<[string, StoredPlatformConfig]> {
+    const migrated = migrateFeishuPlatformConfig(config);
+    return Object.entries(migrated.instances ?? {})
+      .map(([id, instance]) => [normalizeFeishuInstanceId(id), instance] as [string, StoredPlatformConfig])
+      .sort(([left], [right]) => left.localeCompare(right));
+  }
+
+  private feishuInstanceConfig(config: StoredPlatformConfig | undefined, instanceId = "default"): StoredPlatformConfig | undefined {
+    return migrateFeishuPlatformConfig(config).instances?.[normalizeFeishuInstanceId(instanceId)];
+  }
+
+  private async configuredFeishuInstances(stored: StoredConnectorConfig): Promise<Array<[string, StoredPlatformConfig]>> {
+    const platform = platformById("feishu");
+    const ready: Array<[string, StoredPlatformConfig]> = [];
+    for (const [instanceId, instance] of this.feishuInstances(stored.platforms?.feishu)) {
+      if (instance.enabled === false) continue;
+      const missing = await this.missingRequired(platform, instance, {});
+      if (missing.length === 0) ready.push([instanceId, instance]);
+    }
+    return ready;
+  }
+
+  private async hasConfiguredNonFeishuConnector(stored: StoredConnectorConfig, envValues: Record<string, string>) {
+    for (const platform of PLATFORM_REGISTRY) {
+      if (platform.id === "feishu") continue;
+      const config = stored.platforms?.[platform.id];
+      if (!config || config.enabled === false) continue;
+      if ((await this.missingRequired(platform, config, envValues)).length === 0) return true;
+    }
+    return false;
+  }
+
   private async readEnvValues() {
-    const raw = await fs.readFile(await this.envPath(), "utf8").catch(() => "");
+    return this.readEnvValuesFromPath(await this.envPath());
+  }
+
+  private async readEnvValuesFromPath(envPath: string) {
+    const raw = await fs.readFile(envPath, "utf8").catch(() => "");
     const values: Record<string, string> = {};
     for (const line of raw.split(/\r?\n/)) {
       const trimmed = line.trim();
@@ -1842,8 +2164,76 @@ function platformById(id: HermesConnectorPlatformId) {
   return platform;
 }
 
-function secretRef(platformId: HermesConnectorPlatformId, fieldKey: string) {
+function secretRef(platformId: HermesConnectorPlatformId, fieldKey: string, instanceId?: string) {
+  if (platformId === "feishu") {
+    return `connector.feishu.${normalizeFeishuInstanceId(instanceId)}.${fieldKey}`;
+  }
   return `connector.${platformId}.${fieldKey}`;
+}
+
+function migrateConnectorConfig(platforms: Partial<Record<HermesConnectorPlatformId, StoredPlatformConfig>>) {
+  return {
+    ...platforms,
+    ...(platforms.feishu ? { feishu: migrateFeishuPlatformConfig(platforms.feishu) } : {}),
+  };
+}
+
+function migrateFeishuPlatformConfig(config: StoredPlatformConfig | undefined): StoredPlatformConfig {
+  if (!config) return { enabled: true, instances: {} };
+  if (config.instances) {
+    const instances = Object.fromEntries(
+      Object.entries(config.instances).map(([id, instance]) => [normalizeFeishuInstanceId(id), instance]),
+    );
+    return { ...config, enabled: true, instances };
+  }
+  const hasLegacyConfig = Boolean(
+    Object.keys(config.values ?? {}).length ||
+    Object.keys(config.secretRefs ?? {}).length ||
+    typeof config.enabled !== "undefined" ||
+    config.updatedAt ||
+    config.lastSyncedAt,
+  );
+  if (!hasLegacyConfig) return { ...config, enabled: true, instances: {} };
+  const { instances: _instances, ...legacy } = config;
+  return {
+    enabled: true,
+    instances: {
+      default: legacy,
+    },
+  };
+}
+
+function normalizeFeishuInstanceId(instanceId?: string) {
+  const normalized = (instanceId || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return normalized || "default";
+}
+
+function normalizeHermesProfileId(profileId?: string) {
+  const normalized = (profileId || "default")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return normalized || "default";
+}
+
+function feishuRuntimeKey(instanceId?: string) {
+  return `feishu:${normalizeFeishuInstanceId(instanceId)}`;
+}
+
+function feishuInstanceLabel(instanceId: string | undefined, values: Record<string, string | boolean>) {
+  const name = stringValue(values.botName) || stringValue(values.appId) || normalizeFeishuInstanceId(instanceId);
+  return name === "default" ? "飞书默认机器人" : name;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function connectorStatus(enabled: boolean, configured: boolean): HermesConnectorStatus {
@@ -1852,7 +2242,7 @@ function connectorStatus(enabled: boolean, configured: boolean): HermesConnector
   return "configured";
 }
 
-function connectorRuntimeStatus(platformId: HermesConnectorPlatformId, enabled: boolean, configured: boolean, gateway: HermesGatewayStatus): HermesConnectorConfig["runtimeStatus"] {
+function connectorRuntimeStatus(platformId: string, enabled: boolean, configured: boolean, gateway: HermesGatewayStatus): HermesConnectorConfig["runtimeStatus"] {
   if (!enabled || !configured) return "stopped";
   const hasPlatformState = Boolean(gateway.platformStates && Object.keys(gateway.platformStates).length > 0);
   const platformState = gateway.platformStates?.[platformId]?.toLowerCase();
@@ -2235,7 +2625,9 @@ function isWeixinQrPhase(value: string): value is WeixinQrLoginStatus["phase"] {
   ].includes(value);
 }
 
-function parseGatewayStateSnapshot(raw: string, pidAlive: (pid: number) => boolean, nowMs = Date.now()): GatewayStateSnapshot | undefined {
+function parseGatewayStateSnapshot(raw: string, pidAlive: (pid: number) => boolean, platformKeyPrefixOrNowMs?: string | number, nowMs = Date.now()): GatewayStateSnapshot | undefined {
+  const platformKeyPrefix = typeof platformKeyPrefixOrNowMs === "string" ? platformKeyPrefixOrNowMs : undefined;
+  const effectiveNowMs = typeof platformKeyPrefixOrNowMs === "number" ? platformKeyPrefixOrNowMs : nowMs;
   let payload: unknown;
   try {
     payload = JSON.parse(raw);
@@ -2249,12 +2641,12 @@ function parseGatewayStateSnapshot(raw: string, pidAlive: (pid: number) => boole
   if (pid && !pidAlive(pid)) return undefined;
   const updatedAt = typeof record.updated_at === "string" ? record.updated_at : undefined;
   const updatedAtMs = updatedAt ? parseGatewayUpdatedAtMs(updatedAt) : undefined;
-  const freshWithoutPid = typeof updatedAtMs === "number" && nowMs - updatedAtMs >= 0 && nowMs - updatedAtMs <= 120_000;
+  const freshWithoutPid = typeof updatedAtMs === "number" && effectiveNowMs - updatedAtMs >= 0 && effectiveNowMs - updatedAtMs <= 120_000;
   if (!pid && !freshWithoutPid) return undefined;
   const platformStates = record.platforms && typeof record.platforms === "object"
     ? Object.fromEntries(
       Object.entries(record.platforms as Record<string, Record<string, unknown>>)
-        .map(([key, value]) => [key, typeof value?.state === "string" ? value.state : "unknown"]),
+        .map(([key, value]) => [platformKeyPrefix && key === "feishu" ? platformKeyPrefix : key, typeof value?.state === "string" ? value.state : "unknown"]),
     )
     : undefined;
   const connectedPlatforms = platformStates
@@ -2270,6 +2662,25 @@ function parseGatewayStateSnapshot(raw: string, pidAlive: (pid: number) => boole
     message,
     platformStates,
     connectedPlatforms,
+  };
+}
+
+function mergeGatewayStateSnapshots(snapshots: GatewayStateSnapshot[]): GatewayStateSnapshot | undefined {
+  const active = snapshots.filter((snapshot) => snapshot.running);
+  if (active.length === 0) return undefined;
+  const platformStates = Object.assign({}, ...active.map((snapshot) => snapshot.platformStates ?? {}));
+  const connectedPlatforms = Object.entries(platformStates)
+    .filter(([, state]) => String(state).toLowerCase() === "connected")
+    .map(([key]) => key);
+  return {
+    running: true,
+    pid: active.find((snapshot) => snapshot.pid)?.pid,
+    updatedAt: active.map((snapshot) => snapshot.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1),
+    platformStates: Object.keys(platformStates).length ? platformStates : undefined,
+    connectedPlatforms,
+    message: connectedPlatforms.length > 0
+      ? `Gateway 状态文件显示正在运行，已连接：${connectedPlatforms.join(", ")}。`
+      : "Gateway 状态文件显示正在运行。",
   };
 }
 

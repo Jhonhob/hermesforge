@@ -172,6 +172,89 @@ describe("SessionLog.aggregateUsageForSession", () => {
       updatedAt: "2026-04-22T10:00:03.000Z",
     });
   });
+
+  it("keeps latest actual context window usage for session insights", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-session-log-"));
+    tempRoots.push(root);
+    const appPaths = new AppPaths(root);
+    const sessionLog = new SessionLog(appPaths);
+    const workspaceId = appPaths.workspaceId(path.join(root, "workspace"));
+
+    await sessionLog.append(workspaceId, {
+      ...usageEventFor("task-1", "session-a", 120, 30, 0.001, "2026-04-22T10:00:00.000Z"),
+      event: {
+        type: "usage",
+        source: "actual",
+        inputTokens: 120,
+        outputTokens: 30,
+        totalTokens: 170,
+        contextTokens: 4096,
+        contextWindow: 128000,
+        contextPercent: 3,
+        estimatedCostUsd: 0.001,
+        message: "actual",
+        at: "2026-04-22T10:00:00.000Z",
+      },
+    });
+
+    const usage = await sessionLog.aggregateUsageForSession(workspaceId, "session-a");
+
+    expect(usage).toMatchObject({
+      latestTotalTokens: 170,
+      latestContextTokens: 4096,
+      latestContextWindow: 128000,
+      latestContextPercent: 3,
+      source: "actual",
+    });
+  });
+
+  it("prefers actual usage over a later estimate for the same task run", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-session-log-"));
+    tempRoots.push(root);
+    const appPaths = new AppPaths(root);
+    const sessionLog = new SessionLog(appPaths);
+    const workspaceId = appPaths.workspaceId(path.join(root, "workspace"));
+
+    await sessionLog.append(workspaceId, {
+      ...usageEventFor("task-1", "session-a", 40, 15, 0, "2026-04-22T10:00:02.000Z"),
+      event: {
+        type: "usage",
+        source: "estimated",
+        inputTokens: 40,
+        outputTokens: 15,
+        totalTokens: 55,
+        estimatedCostUsd: 0,
+        message: "estimate",
+        at: "2026-04-22T10:00:02.000Z",
+      },
+    });
+    await sessionLog.append(workspaceId, {
+      ...usageEventFor("task-1", "session-a", 9421, 519, 0.01, "2026-04-22T10:00:01.000Z"),
+      event: {
+        type: "usage",
+        source: "actual",
+        inputTokens: 9421,
+        outputTokens: 519,
+        totalTokens: 9940,
+        contextTokens: 11981,
+        contextWindow: 256000,
+        estimatedCostUsd: 0.01,
+        message: "actual",
+        at: "2026-04-22T10:00:01.000Z",
+      },
+    });
+
+    const usage = await sessionLog.aggregateUsageForSession(workspaceId, "session-a");
+
+    expect(usage).toMatchObject({
+      totalInputTokens: 9421,
+      totalOutputTokens: 519,
+      latestTotalTokens: 9940,
+      latestContextTokens: 11981,
+      source: "actual",
+      updatedAt: "2026-04-22T10:00:01.000Z",
+    });
+  });
 });
 
 function eventFor(taskRunId: string, workSessionId: string, detail: string, at = "2026-04-22T00:00:00.000Z"): TaskEventEnvelope {

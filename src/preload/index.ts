@@ -51,6 +51,7 @@ import type {
   HermesKanbanTaskActionInput,
   HermesKanbanTaskListOptions,
   HermesConnectorConfig,
+  HermesConnectorDisableInput,
   HermesConnectorListResult,
   HermesConnectorPlatformId,
   HermesConnectorSaveInput,
@@ -304,8 +305,8 @@ const api = {
   listConnectors: () => ipcRenderer.invoke(IpcChannels.listConnectors) as Promise<HermesConnectorListResult>,
   saveConnector: (input: HermesConnectorSaveInput) =>
     ipcRenderer.invoke(IpcChannels.saveConnector, input) as Promise<HermesConnectorConfig>,
-  disableConnector: (platformId: HermesConnectorPlatformId) =>
-    ipcRenderer.invoke(IpcChannels.disableConnector, platformId) as Promise<HermesConnectorConfig>,
+  disableConnector: (input: HermesConnectorDisableInput) =>
+    ipcRenderer.invoke(IpcChannels.disableConnector, input) as Promise<HermesConnectorConfig>,
   syncConnectorsEnv: () =>
     ipcRenderer.invoke(IpcChannels.syncConnectorsEnv) as Promise<{ ok: boolean; envPath: string; message: string; connectors: HermesConnectorConfig[] }>,
   getGatewayStatus: () => ipcRenderer.invoke(IpcChannels.getGatewayStatus) as Promise<HermesGatewayStatus>,

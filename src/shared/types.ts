@@ -344,10 +344,18 @@ export type SessionAgentInsightRuntime = {
 export type SessionAgentInsightUsage = {
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalTokens?: number;
   totalEstimatedCostUsd: number;
   latestInputTokens: number;
   latestOutputTokens: number;
+  latestTotalTokens?: number;
+  latestContextTokens?: number;
+  latestContextWindow?: number;
+  latestContextPercent?: number;
   latestEstimatedCostUsd: number;
+  latestReasoningTokens?: number;
+  latestCacheReadTokens?: number;
+  latestCacheWriteTokens?: number;
   source?: "estimated" | "actual";
   updatedAt: string;
 };
@@ -627,6 +635,9 @@ export type HermesConnectorPlatform = {
 
 export type HermesConnectorConfig = {
   platform: HermesConnectorPlatform;
+  instanceId?: string;
+  instanceLabel?: string;
+  agentId?: string;
   status: HermesConnectorStatus;
   runtimeStatus: "stopped" | "running" | "error";
   enabled: boolean;
@@ -642,8 +653,14 @@ export type HermesConnectorConfig = {
 
 export type HermesConnectorSaveInput = {
   platformId: HermesConnectorPlatformId;
+  instanceId?: string;
   enabled?: boolean;
   values: Record<string, string | boolean | undefined>;
+};
+
+export type HermesConnectorDisableInput = HermesConnectorPlatformId | {
+  platformId: HermesConnectorPlatformId;
+  instanceId?: string;
 };
 
 export type HermesConnectorListResult = {
@@ -1165,7 +1182,7 @@ export type EngineEvent =
   | { type: "diagnostic"; category: string; message: string; provider?: string; model?: string; authMode?: string; durationMs?: number; at: string }
   | { type: "stdout"; line: string; at: string }
   | { type: "stderr"; line: string; at: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number; estimatedCostUsd: number; message: string; at: string; source?: "estimated" | "actual"; totalTokens?: number; promptTokens?: number; completionTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number; estimatedCostUsd: number; message: string; at: string; source?: "estimated" | "actual"; totalTokens?: number; promptTokens?: number; completionTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; contextTokens?: number; contextWindow?: number; contextPercent?: number; costSource?: string }
   | { type: "tool_call"; toolName: string; argsPreview: string; callId?: string; status?: "running" | "complete" | "failed"; summary?: string; at: string }
   | { type: "tool_result"; toolName: string; outputPreview?: string; callId?: string; success?: boolean; status?: "running" | "complete" | "failed"; summary?: string; at: string }
   | { type: "file_change"; path: string; changeType: "create" | "update" | "delete"; at: string }

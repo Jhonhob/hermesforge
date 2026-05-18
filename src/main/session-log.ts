@@ -113,7 +113,14 @@ export class SessionLog {
     const latestByTaskRun = new Map<string, UsageEvent>();
     let latestInputTokens = 0;
     let latestOutputTokens = 0;
+    let latestTotalTokens: number | undefined;
+    let latestContextTokens: number | undefined;
+    let latestContextWindow: number | undefined;
+    let latestContextPercent: number | undefined;
     let latestEstimatedCostUsd = 0;
+    let latestReasoningTokens: number | undefined;
+    let latestCacheReadTokens: number | undefined;
+    let latestCacheWriteTokens: number | undefined;
     let latestSource: "estimated" | "actual" = "estimated";
     let updatedAt = "";
 
@@ -128,16 +135,34 @@ export class SessionLog {
       }
       for (const [taskRunId, usage] of sessionUsage) {
         const existing = latestByTaskRun.get(taskRunId);
-        if (!existing || usage.at >= existing.at) {
+        if (!existing || prefersUsageEvent(usage, existing)) {
           latestByTaskRun.set(taskRunId, usage);
         }
-        if (usage.at >= updatedAt) {
-          latestInputTokens = usage.inputTokens;
-          latestOutputTokens = usage.outputTokens;
-          latestEstimatedCostUsd = usage.estimatedCostUsd;
-          latestSource = usage.source === "actual" ? "actual" : "estimated";
-          updatedAt = usage.at;
-        }
+      }
+    }
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let totalTokens = 0;
+    let totalEstimatedCostUsd = 0;
+    for (const usage of latestByTaskRun.values()) {
+      totalInputTokens += usage.inputTokens;
+      totalOutputTokens += usage.outputTokens;
+      totalTokens += usage.totalTokens ?? usage.inputTokens + usage.outputTokens;
+      totalEstimatedCostUsd += usage.estimatedCostUsd;
+      if (usage.at >= updatedAt) {
+        latestInputTokens = usage.inputTokens;
+        latestOutputTokens = usage.outputTokens;
+        latestTotalTokens = usage.totalTokens;
+        latestContextTokens = usage.contextTokens;
+        latestContextWindow = usage.contextWindow;
+        latestContextPercent = usage.contextPercent;
+        latestEstimatedCostUsd = usage.estimatedCostUsd;
+        latestReasoningTokens = usage.reasoningTokens;
+        latestCacheReadTokens = usage.cacheReadTokens;
+        latestCacheWriteTokens = usage.cacheWriteTokens;
+        latestSource = usage.source === "actual" ? "actual" : "estimated";
+        updatedAt = usage.at;
       }
     }
 
@@ -145,22 +170,21 @@ export class SessionLog {
       return undefined;
     }
 
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalEstimatedCostUsd = 0;
-    for (const usage of latestByTaskRun.values()) {
-      totalInputTokens += usage.inputTokens;
-      totalOutputTokens += usage.outputTokens;
-      totalEstimatedCostUsd += usage.estimatedCostUsd;
-    }
-
     return {
       totalInputTokens,
       totalOutputTokens,
+      ...(totalTokens !== totalInputTokens + totalOutputTokens ? { totalTokens } : {}),
       totalEstimatedCostUsd,
       latestInputTokens,
       latestOutputTokens,
+      ...(typeof latestTotalTokens === "number" ? { latestTotalTokens } : {}),
+      ...(typeof latestContextTokens === "number" ? { latestContextTokens } : {}),
+      ...(typeof latestContextWindow === "number" ? { latestContextWindow } : {}),
+      ...(typeof latestContextPercent === "number" ? { latestContextPercent } : {}),
       latestEstimatedCostUsd,
+      ...(typeof latestReasoningTokens === "number" ? { latestReasoningTokens } : {}),
+      ...(typeof latestCacheReadTokens === "number" ? { latestCacheReadTokens } : {}),
+      ...(typeof latestCacheWriteTokens === "number" ? { latestCacheWriteTokens } : {}),
       source: latestSource,
       updatedAt,
     };
@@ -201,7 +225,7 @@ export class SessionLog {
           latestBySessionAndTask.set(envelope.workSessionId, byTask);
         }
         const existing = byTask.get(envelope.taskRunId);
-        if (!existing || envelope.event.at >= existing.at) {
+        if (!existing || prefersUsageEvent(envelope.event, existing)) {
           byTask.set(envelope.taskRunId, envelope.event);
         }
       } catch {
@@ -213,6 +237,11 @@ export class SessionLog {
     this.usageFileCache.set(filePath, summary);
     return summary;
   }
+}
+
+function prefersUsageEvent(next: UsageEvent, current: UsageEvent) {
+  if ((next.source === "actual") !== (current.source === "actual")) return next.source === "actual";
+  return next.at >= current.at;
 }
 
 async function fileSignature(filePath: string) {

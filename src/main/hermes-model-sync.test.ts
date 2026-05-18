@@ -236,6 +236,49 @@ describe("HermesModelSyncService", () => {
     expect(env).not.toContain("OPENAI_BASE_URL=");
   });
 
+  it("persists the corrected MiniMax Token Plan base URL after old endpoint migration", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-model-sync-minimax-old-"));
+    const config: RuntimeConfig = {
+      defaultModelProfileId: "minimax-old",
+      modelProfiles: [{
+        id: "minimax-old",
+        provider: "custom",
+        sourceType: "minimax_api_key",
+        model: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.chat/v1",
+        secretRef: "provider.minimax.apiKey",
+      }],
+      updateSources: {},
+    };
+    const resolver = {
+      resolveFromConfig: async () => ({
+        profileId: "minimax-old",
+        provider: "custom",
+        sourceType: "minimax_token_plan_api_key",
+        model: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.chat/v1",
+        env: {
+          AI_PROVIDER: "custom",
+          AI_MODEL: "MiniMax-M2.7",
+          AI_BASE_URL: "https://api.minimaxi.com/anthropic",
+          MINIMAX_BASE_URL: "https://api.minimaxi.com/anthropic",
+          ANTHROPIC_BASE_URL: "https://api.minimaxi.com/anthropic",
+          MINIMAX_API_KEY: "sk-minimax",
+          ANTHROPIC_API_KEY: "sk-minimax",
+          ANTHROPIC_AUTH_TOKEN: "sk-minimax",
+        },
+      }),
+    };
+
+    const service = new HermesModelSyncService(resolver as never, () => home);
+    await service.syncRuntimeConfig(config);
+
+    const yaml = await fs.readFile(path.join(home, "config.yaml"), "utf8");
+    expect(yaml).toContain("provider: \"minimax-cn\"");
+    expect(yaml).toContain("base_url: \"https://api.minimaxi.com/anthropic\"");
+    expect(yaml).not.toContain("api.minimax.chat");
+  });
+
   it("infers old MiMo OpenAI-compatible profiles and writes Xiaomi for Hermes", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-model-sync-mimo-token-plan-"));
     const config: RuntimeConfig = {

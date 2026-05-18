@@ -219,7 +219,7 @@ export class TaskRunner {
     this.usage.set(
       sessionId,
       createTaskUsageState(
-        this.estimateTokens(input.userInput) + this.estimateTokens(contextBundle.summary),
+        this.initialInputTokens(input, contextBundle),
         runtimeEnv,
         runtimeConfig,
       ),
@@ -558,7 +558,7 @@ export class TaskRunner {
     await this.sessionLog.append(workspaceId, safeEnvelope);
     this.getMainWindow()?.webContents.send(IpcChannels.taskEvent, safeEnvelope);
     await this.publishDerivedEvents(workspaceId, workSessionId, taskRunId, engineId, event);
-    if (event.type === "stdout" || event.type === "stderr") {
+    if (event.type === "stdout" || event.type === "stderr" || event.type === "message_chunk" || event.type === "reasoning") {
       await this.publishUsage(workspaceId, workSessionId, taskRunId, engineId);
     }
   }
@@ -573,9 +573,17 @@ export class TaskRunner {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       estimatedCostUsd: usage.estimatedCostUsd,
-      totalTokens: usage.inputTokens + usage.outputTokens,
+      totalTokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      reasoningTokens: usage.reasoningTokens,
+      contextTokens: usage.contextTokens,
+      contextWindow: usage.contextWindow,
+      contextPercent: usage.contextPercent,
       source: usage.source,
-      message: `${usage.source === "actual" ? "实测" : "估算"} Token：输入 ${usage.inputTokens}，输出 ${usage.outputTokens}。费用约 $${usage.estimatedCostUsd.toFixed(4)}。`,
+      message: `${usage.source === "actual" ? "实测" : "估算"} Token：输入 ${usage.inputTokens}，输出 ${usage.outputTokens}，总计 ${usage.totalTokens ?? usage.inputTokens + usage.outputTokens}${usage.contextTokens ? `，上下文 ${usage.contextTokens}` : ""}。费用约 $${usage.estimatedCostUsd.toFixed(4)}。`,
       at: now(),
     };
     const envelope: TaskEventEnvelope = { taskRunId, workSessionId, sessionId: taskRunId, engineId, event };
@@ -598,6 +606,19 @@ export class TaskRunner {
 
   private estimateTokens(text: string) {
     return estimateTextTokens(text);
+  }
+
+  private initialInputTokens(input: StartTaskInput, contextBundle: ContextBundle) {
+    const selectedFiles = input.selectedFiles.join("\n");
+    const attachments = (input.attachments ?? []).map((attachment) => `${attachment.name} ${attachment.kind} ${attachment.path}`).join("\n");
+    const history = (input.conversationHistory ?? []).map((entry) => `${entry.role}: ${entry.content}`).join("\n");
+    return this.estimateTokens([
+      input.userInput,
+      contextBundle.summary,
+      selectedFiles,
+      attachments,
+      history,
+    ].filter(Boolean).join("\n"));
   }
 
   private captureFirstOutputMetric(sessionId: string, event: EngineEvent) {

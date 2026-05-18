@@ -203,9 +203,18 @@ const connectorPlatformIdSchema = z.enum([
 
 const connectorSaveInputSchema = z.object({
   platformId: connectorPlatformIdSchema,
+  instanceId: z.string().trim().max(80).optional(),
   enabled: z.boolean().optional(),
   values: z.record(z.string(), z.union([z.string().max(20000), z.boolean(), z.undefined()])),
 });
+
+const connectorDisableInputSchema = z.union([
+  connectorPlatformIdSchema,
+  z.object({
+    platformId: connectorPlatformIdSchema,
+    instanceId: z.string().trim().max(80).optional(),
+  }),
+]);
 
 const modelConnectionDraftSchema = z.object({
   sourceType: z.enum([
@@ -531,8 +540,8 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
   ipcMain.handle(IpcChannels.saveConnector, (_event, input) =>
     services.hermesConnectorService.save(connectorSaveInputSchema.parse(input ?? {})),
   );
-  ipcMain.handle(IpcChannels.disableConnector, (_event, platformId: string) =>
-    services.hermesConnectorService.disable(connectorPlatformIdSchema.parse(platformId)),
+  ipcMain.handle(IpcChannels.disableConnector, (_event, input) =>
+    services.hermesConnectorService.disable(connectorDisableInputSchema.parse(input)),
   );
   ipcMain.handle(IpcChannels.syncConnectorsEnv, () => services.hermesConnectorService.syncEnv());
   ipcMain.handle(IpcChannels.getGatewayStatus, () => services.hermesConnectorService.status());

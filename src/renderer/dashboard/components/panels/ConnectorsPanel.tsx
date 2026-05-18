@@ -109,7 +109,7 @@ const qrSteps: Array<{ phase: WeixinQrLoginPhase; label: string }> = [
 
 export function ConnectorsPanel() {
   const [data, setData] = useState<HermesConnectorListResult | undefined>();
-  const [editingId, setEditingId] = useState<HermesConnectorPlatformId | undefined>();
+  const [editingKey, setEditingKey] = useState<string | undefined>();
   const [formValues, setFormValues] = useState<FormValues>({});
   const [formEnabled, setFormEnabled] = useState(true);
   const [showAdvancedEditor, setShowAdvancedEditor] = useState(false);
@@ -119,12 +119,12 @@ export function ConnectorsPanel() {
   const [error, setError] = useState("");
   const [weixinQr, setWeixinQr] = useState<WeixinQrLoginStatus | undefined>();
   const [weixinWizardOpen, setWeixinWizardOpen] = useState(false);
-  const [highlightedId, setHighlightedId] = useState<HermesConnectorPlatformId | undefined>();
+  const [highlightedKey, setHighlightedKey] = useState<string | undefined>();
   const editorRef = useRef<HTMLElement | null>(null);
 
   const editing = useMemo(
-    () => data?.connectors.find((connector) => connector.platform.id === editingId),
-    [data?.connectors, editingId],
+    () => data?.connectors.find((connector) => connectorKey(connector) === editingKey),
+    [data?.connectors, editingKey],
   );
   const weixinConnector = data?.connectors.find((connector) => connector.platform.id === "weixin");
   const recommendation = getRecommendation(data);
@@ -152,21 +152,21 @@ export function ConnectorsPanel() {
       setWeixinQr(status);
       if (status.phase === "success") {
         await load();
-        setHighlightedId("weixin");
+        setHighlightedKey("weixin");
         setMessage(status.message);
-        window.setTimeout(() => setHighlightedId(undefined), 4500);
+        window.setTimeout(() => setHighlightedKey(undefined), 4500);
       }
     }, 1300);
     return () => window.clearInterval(timer);
   }, [weixinWizardOpen, weixinQr?.phase]);
 
   useEffect(() => {
-    if (!editingId || !editorRef.current) return;
+    if (!editingKey || !editorRef.current) return;
     editorRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     setEditorJustOpened(true);
     const timer = window.setTimeout(() => setEditorJustOpened(false), 1800);
     return () => window.clearTimeout(timer);
-  }, [editingId]);
+  }, [editingKey]);
 
   async function load() {
     setBusy("refresh");
@@ -188,12 +188,31 @@ export function ConnectorsPanel() {
         : connector.values[field.key] ?? (field.type === "boolean" ? false : "");
     }
     const nextValues = withConnectorDefaults(connector.platform.id, values);
-    setEditingId(connector.platform.id);
+    setEditingKey(connectorKey(connector));
     setFormEnabled(connector.enabled);
     setShowAdvancedEditor(false);
     setFormValues(nextValues);
     setMessage("");
     setError("");
+  }
+
+  function startNewFeishuInstance(template: HermesConnectorConfig) {
+    const instanceId = `bot-${Date.now().toString(36)}`;
+    startEditing({
+      ...template,
+      instanceId,
+      instanceLabel: `飞书机器人 ${instanceId}`,
+      agentId: undefined,
+      enabled: true,
+      configured: false,
+      missingRequired: ["appId", "appSecret"],
+      values: {},
+      secretRefs: {},
+      secretStatus: Object.fromEntries(template.platform.fields.filter((field) => field.secret).map((field) => [field.key, false])),
+      updatedAt: undefined,
+      lastSyncedAt: undefined,
+      message: "新飞书机器人实例，保存后会独立同步和启动。",
+    });
   }
 
   function updateEditingField(field: HermesConnectorField, value: string | boolean) {
@@ -215,22 +234,23 @@ export function ConnectorsPanel() {
     await runAction("save", async () => {
       const input: HermesConnectorSaveInput = {
         platformId: editing.platform.id,
+        instanceId: editing.instanceId,
         enabled: formEnabled,
         values: formValues,
       };
       await window.workbenchClient.saveConnector(input);
       await load();
       setMessage(`${editing.platform.label} 配置已加密保存。`);
-      setEditingId(undefined);
+      setEditingKey(undefined);
     });
   }
 
   async function disableConnector(connector: HermesConnectorConfig) {
-    await runAction(`disable-${connector.platform.id}`, async () => {
-      await window.workbenchClient.disableConnector(connector.platform.id);
+    await runAction(`disable-${connectorKey(connector)}`, async () => {
+      await window.workbenchClient.disableConnector({ platformId: connector.platform.id, instanceId: connector.instanceId });
       await load();
       setMessage(`${connector.platform.label} 已禁用。`);
-      if (editingId === connector.platform.id) setEditingId(undefined);
+      if (editingKey === connectorKey(connector)) setEditingKey(undefined);
     });
   }
 
@@ -397,7 +417,7 @@ export function ConnectorsPanel() {
               <h3 className="text-sm font-semibold text-slate-900">配置 {editing.platform.label}</h3>
               <p className="mt-1 text-xs text-slate-500">{editing.platform.description}</p>
             </div>
-            <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setEditingId(undefined)} type="button">
+            <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setEditingKey(undefined)} type="button">
               关闭
             </button>
           </div>
@@ -472,7 +492,7 @@ export function ConnectorsPanel() {
           </div>
 
           <div className="mt-4 flex justify-end gap-2">
-            <button className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 hover:bg-slate-100" onClick={() => setEditingId(undefined)} type="button">
+            <button className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 hover:bg-slate-100" onClick={() => setEditingKey(undefined)} type="button">
               取消
             </button>
             <button
@@ -491,14 +511,15 @@ export function ConnectorsPanel() {
       <div className="grid gap-3 lg:grid-cols-2">
         {(data?.connectors ?? []).map((connector) => (
           <ConnectorCard
-            key={connector.platform.id}
+            key={connectorKey(connector)}
             connector={connector}
             busy={busy}
             gatewayRunning={Boolean(gateway?.running)}
-            highlighted={highlightedId === connector.platform.id}
+            highlighted={highlightedKey === connectorKey(connector)}
             onEdit={() => startEditing(connector)}
             onDisable={() => void disableConnector(connector)}
             onGatewayStart={() => void gatewayAction("start")}
+            onAddFeishuInstance={connector.platform.id === "feishu" ? () => startNewFeishuInstance(connector) : undefined}
             onWeixinQr={connector.platform.id === "weixin" ? () => void openWeixinWizard(!connector.configured) : undefined}
           />
         ))}
@@ -618,6 +639,7 @@ function ConnectorCard(props: {
   onEdit(): void;
   onDisable(): void;
   onGatewayStart(): void;
+  onAddFeishuInstance?: () => void;
   onWeixinQr?: () => void;
 }) {
   const { connector } = props;
@@ -655,7 +677,13 @@ function ConnectorCard(props: {
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">{connector.platform.label}</h3>
+              <h3 className="text-sm font-semibold text-slate-900">{connector.instanceLabel ?? connector.platform.label}</h3>
+              {connector.instanceId ? (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">{connector.platform.label}:{connector.instanceId}</span>
+              ) : null}
+              {connector.platform.id === "feishu" ? (
+                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">Agent:{connector.agentId || "default"}</span>
+              ) : null}
               <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", statusClass)}>
                 {statusLabels[connector.status]}
               </span>
@@ -670,6 +698,16 @@ function ConnectorCard(props: {
           </div>
         </div>
         <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
+          {props.onAddFeishuInstance ? (
+            <button
+              className="grid h-8 w-8 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              onClick={props.onAddFeishuInstance}
+              title="新增飞书机器人"
+              type="button"
+            >
+              <ExternalLink size={14} />
+            </button>
+          ) : null}
           <button
             className="grid h-8 w-8 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
             onClick={props.onEdit}
@@ -680,7 +718,7 @@ function ConnectorCard(props: {
           </button>
           <button
             className="grid h-8 w-8 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
-            disabled={!connector.enabled || props.busy === `disable-${connector.platform.id}`}
+            disabled={!connector.enabled || props.busy === `disable-${connectorKey(connector)}`}
             onClick={props.onDisable}
             title="禁用"
             type="button"
@@ -1157,6 +1195,10 @@ function withConnectorDefaults(platformId: HermesConnectorPlatformId, values: Fo
   return next;
 }
 
+function connectorKey(connector: Pick<HermesConnectorConfig, "platform" | "instanceId">) {
+  return connector.instanceId ? `${connector.platform.id}:${connector.instanceId}` : connector.platform.id;
+}
+
 function getConnectorEditorConfig(platformId: HermesConnectorPlatformId, values: FormValues): ConnectorEditorConfig {
   const emailPreset = detectEmailPreset(stringValue(values.address));
   switch (platformId) {
@@ -1241,7 +1283,7 @@ function getConnectorEditorConfig(platformId: HermesConnectorPlatformId, values:
     case "feishu":
       return {
         summary: "飞书对齐 Hermes CLI：先填 App ID / Secret，默认 WebSocket、私聊配对审批、群聊 @ 机器人触发。",
-        advancedFieldKeys: ["allowAllUsers", "allowedUsers", "groupPolicy", "requireMention", "allowBots", "botOpenId", "botUserId", "botName", "encryptKey", "verificationToken", "agentMapping", "homeChannel"],
+        advancedFieldKeys: ["agentId", "allowAllUsers", "allowedUsers", "groupPolicy", "requireMention", "allowBots", "botOpenId", "botUserId", "botName", "encryptKey", "verificationToken", "agentMapping", "homeChannel"],
         presets: [
           {
             key: "feishu-cn-websocket",
@@ -1256,7 +1298,7 @@ function getConnectorEditorConfig(platformId: HermesConnectorPlatformId, values:
             apply: (current) => ({ ...current, domain: "lark", connectionMode: "websocket", allowAllUsers: false, groupPolicy: "open", allowBots: "none", requireMention: true }),
           },
         ],
-        tips: ["FEISHU_ALLOW_ALL_USERS=false 时走 Hermes 配对审批", "群聊默认 open，但 requireMention=true，所以仍需 @ 机器人", "Agent 映射会写入 .env 供后续多实例路由使用"],
+        tips: ["每个飞书机器人会独立启动 Gateway", "绑定 Agent 后使用该 Agent 的独立运行目录", "群聊默认 open，但 requireMention=true，所以仍需 @ 机器人"],
       };
     case "homeassistant":
       return {

@@ -383,6 +383,9 @@ function toMiniMaxAnthropicBaseUrl(baseUrl?: string) {
   try {
     const parsed = new URL(raw);
     const host = parsed.hostname.toLowerCase();
+    if (host === "api.minimax.chat") {
+      return "https://api.minimaxi.com/anthropic";
+    }
     if (host === "api.minimaxi.com" || host === "api.minimax.io") {
       parsed.pathname = "/anthropic";
       parsed.search = "";

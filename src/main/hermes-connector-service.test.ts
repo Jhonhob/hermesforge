@@ -305,7 +305,7 @@ describe("HermesConnectorService helpers", () => {
     expect(baseEnvExists).toBe(false);
   });
 
-  it("syncs Feishu identity and agent mapping fields to env", async () => {
+  it("migrates legacy Feishu config into an isolated default instance env", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-"));
     const forgeHome = path.join(tempDir, "hermes-home");
     await fs.mkdir(forgeHome, { recursive: true });
@@ -343,8 +343,10 @@ describe("HermesConnectorService helpers", () => {
     );
 
     const result = await service.syncEnv();
-    const env = await fs.readFile(result.envPath, "utf8");
+    const env = await fs.readFile(path.join(forgeHome, "connector-instances", "feishu", "default", ".env"), "utf8");
+    const mainEnv = await fs.readFile(result.envPath, "utf8");
 
+    expect(mainEnv).not.toContain("FEISHU_APP_ID=cli_a");
     expect(env).toContain("FEISHU_APP_ID=cli_a");
     expect(env).toContain("FEISHU_APP_SECRET=feishu-secret");
     expect(env).toContain("FEISHU_DOMAIN=feishu");
@@ -354,6 +356,110 @@ describe("HermesConnectorService helpers", () => {
     expect(env).toContain("FEISHU_BOT_OPEN_ID=ou_bot");
     expect(env).toContain("FEISHU_REQUIRE_MENTION=true");
     expect(env).toContain("FEISHU_AGENT_MAPPING=agent-a=cli_a,agent-b=cli_b");
+  });
+
+  it("syncs multiple Feishu bot instances into separate env files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-multi-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    await fs.mkdir(forgeHome, { recursive: true });
+    await fs.mkdir(path.join(forgeHome, "profiles", "agent-alpha"), { recursive: true });
+    await fs.writeFile(path.join(forgeHome, "profiles", "agent-alpha", "config.yaml"), "model:\n  default: alpha-model\n", "utf8");
+    await fs.writeFile(path.join(forgeHome, "profiles", "agent-alpha", "auth.json"), "{\"token\":\"alpha\"}", "utf8");
+    await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
+      platforms: {
+        feishu: {
+          enabled: true,
+          instances: {
+            alpha: {
+              enabled: true,
+              values: { appId: "cli_alpha", domain: "feishu", connectionMode: "websocket", agentId: "agent-alpha" },
+              secretRefs: { appSecret: "connector.feishu.alpha.appSecret" },
+            },
+            beta: {
+              enabled: true,
+              values: { appId: "cli_beta", domain: "feishu", connectionMode: "websocket", agentId: "agent-beta" },
+              secretRefs: { appSecret: "connector.feishu.beta.appSecret" },
+            },
+          },
+        },
+      },
+    }), "utf8");
+
+    const service = new HermesConnectorService(
+      { baseDir: () => tempDir, hermesDir: () => forgeHome } as never,
+      {
+        hasSecret: vi.fn(async () => true),
+        readSecret: vi.fn(async (ref: string) => ref.includes("alpha") ? "secret-alpha" : "secret-beta"),
+      } as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this sync-only test.");
+      },
+    );
+
+    const result = await service.syncEnv();
+    const mainEnv = await fs.readFile(result.envPath, "utf8");
+    const alphaHome = path.join(forgeHome, "profiles", "agent-alpha", "connector-instances", "feishu", "alpha");
+    const betaHome = path.join(forgeHome, "profiles", "agent-beta", "connector-instances", "feishu", "beta");
+    const alphaEnv = await fs.readFile(path.join(alphaHome, ".env"), "utf8");
+    const betaEnv = await fs.readFile(path.join(betaHome, ".env"), "utf8");
+
+    expect(mainEnv).not.toContain("FEISHU_APP_ID=");
+    expect(alphaEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:alpha");
+    expect(alphaEnv).toContain("HERMES_AGENT_PROFILE=agent-alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_ID=cli_alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_SECRET=secret-alpha");
+    expect(alphaEnv).toContain("HERMES_AGENT_ID=agent-alpha");
+    expect(betaEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:beta");
+    expect(betaEnv).toContain("HERMES_AGENT_PROFILE=agent-beta");
+    expect(betaEnv).toContain("FEISHU_APP_ID=cli_beta");
+    expect(betaEnv).toContain("FEISHU_APP_SECRET=secret-beta");
+    expect(betaEnv).toContain("HERMES_AGENT_ID=agent-beta");
+    await expect(fs.lstat(path.join(alphaHome, "memories"))).resolves.toBeTruthy();
+    await expect(fs.lstat(path.join(alphaHome, "config.yaml"))).resolves.toBeTruthy();
+    await expect(fs.lstat(path.join(alphaHome, "auth.json"))).resolves.toBeTruthy();
+    await expect(fs.lstat(path.join(betaHome, "skills"))).resolves.toBeTruthy();
+  });
+
+  it("reads Feishu runtime state from the bound Agent profile instance home", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-status-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    const instanceHome = path.join(forgeHome, "profiles", "agent-alpha", "connector-instances", "feishu", "alpha");
+    await fs.mkdir(instanceHome, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
+      platforms: {
+        feishu: {
+          enabled: true,
+          instances: {
+            alpha: {
+              enabled: true,
+              values: { appId: "cli_alpha", domain: "feishu", connectionMode: "websocket", agentId: "agent-alpha" },
+              secretRefs: { appSecret: "connector.feishu.alpha.appSecret" },
+            },
+          },
+        },
+      },
+    }), "utf8");
+    await fs.writeFile(path.join(instanceHome, "gateway_state.json"), JSON.stringify({
+      gateway_state: "running",
+      updated_at: new Date().toISOString(),
+      platforms: { feishu: { state: "connected" } },
+    }), "utf8");
+
+    const service = new HermesConnectorService(
+      { baseDir: () => tempDir, hermesDir: () => forgeHome } as never,
+      {} as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this status-only test.");
+      },
+    );
+
+    const status = await (service as any).gatewayStateStatus();
+
+    expect(status).toMatchObject({
+      running: true,
+      platformStates: { "feishu:alpha": "connected" },
+      connectedPlatforms: ["feishu:alpha"],
+    });
   });
 
   it("syncs QQ Bot credentials using Hermes CLI env names", async () => {

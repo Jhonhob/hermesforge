@@ -1,5 +1,37 @@
 # Release Notes
 
+## Hermes Forge v0.2.22
+
+发布日期：2026-05-18
+
+这是一次飞书多机器人隔离与 token 统计修复版本。重点解决两个飞书机器人绑定不同智能体时可能互相覆盖配置、配对失败，以及 Windows Native 模式下 token/上下文显示长期停留在估算值的问题。
+
+### 核心修复
+
+- **飞书多机器人不再互相覆盖**：飞书连接器升级为多实例模型，每个 Bot 使用独立实例 ID、secret ref、`.env`、Gateway 状态和运行目录，避免多个机器人共享一组 `FEISHU_*` 环境变量。
+- **飞书 Bot 真实绑定 Agent profile**：每个飞书实例按 `agentId` 启动在对应 Hermes profile 下，并挂接该 profile 的技能、记忆、配置和认证文件；状态按 `feishu:<instanceId>` 聚合。
+- **Token 用量 actual 优先**：Windows bridge 会透传 Hermes/provider 返回的 prompt、completion、total、cache、reasoning 与上下文窗口字段；前端收到 actual 后覆盖估算。
+- **修复 token 小标签卡在旧估算**：聊天气泡和 Agent 运行面板统一按 actual 优先、当前任务优先展示，不再被早期 `约 55 token` 之类估算事件挡住。
+
+### 新增功能
+
+- **飞书实例 UI**：连接器面板支持新增、编辑、禁用多个飞书机器人，并在卡片上展示实例 ID 与绑定 Agent。
+- **上下文窗口实测显示**：输入框上下文条和运行面板会展示实测上下文占用、剩余窗口、最近输入/输出，并在缺少 actual 时明确标注估算。
+- **MiniMax Token Plan 兼容**：旧 MiniMax-M2 配置会迁移到 Token Plan 运行时入口，避免模型配置继续走旧 endpoint。
+
+### 体验优化
+
+- **会话 usage 聚合更稳**：同一任务同时存在 estimated 和 actual 时优先保留 actual，重启恢复后也不会退回旧估算。
+- **运行面板更贴近本轮任务**：Token 卡优先展示当前 active run 的 usage，避免把同会话其它轮次混入“本轮占用”。
+- **飞书兼容旧配置**：已有单飞书配置会自动迁移为 `default` 实例，原有 secret ref 不丢失。
+
+### 验证
+
+- `npm run check` 通过
+- `npm test` 通过，51 个测试文件、375 个测试全部成功
+- `npm run build` 通过
+- 飞书多实例与 token 展示相关 targeted tests 通过
+
 ## Hermes Forge v0.2.21
 
 发布日期：2026-05-18

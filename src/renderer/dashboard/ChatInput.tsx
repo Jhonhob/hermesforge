@@ -624,7 +624,7 @@ export function ChatInput(props: {
     <div className="mx-auto w-full max-w-[1120px] px-4 pb-4 pt-3 2xl:max-w-[1240px]" data-testid="chat-input-shell">
       <div className="relative">
         {commands.length ? (
-          <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-full overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+          <div className="hermes-command-menu absolute bottom-[calc(100%+10px)] left-0 z-20 w-full overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
             {commands.map((command, index) => (
               <button
                 key={command.name}
@@ -719,7 +719,7 @@ export function ChatInput(props: {
                 </button>
 
                 {plusMenuOpen ? (
-                  <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-56 overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+                  <div className="hermes-input-menu absolute bottom-[calc(100%+10px)] left-0 z-20 w-56 overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
                     <MenuItem icon={Paperclip} label={isImportingAttachment ? "正在导入附件" : "附件"} onClick={() => void pickAttachments()} disabled={Boolean(store.runningTaskRunId) || isImportingAttachment} />
                     <MenuItem icon={isListening ? MicOff : Mic} label={isListening ? "停止语音输入" : "语音输入"} onClick={() => void toggleVoiceInput()} />
                     <MenuItem icon={Plus} label="@ 提及" onClick={() => fillInput("@Hermes ")} />
@@ -749,7 +749,7 @@ export function ChatInput(props: {
                   <span className="truncate">{currentModelLabel}</span>
                 </button>
                 {modelMenuOpen ? (
-                  <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 max-h-72 w-72 overflow-auto rounded-2xl border border-[var(--hermes-card-border)] bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
+                  <div className="hermes-model-menu absolute bottom-[calc(100%+10px)] left-0 z-20 max-h-72 w-72 overflow-auto rounded-2xl border border-[var(--hermes-card-border)] bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
                     {(store.runtimeConfig?.modelProfiles ?? []).length ? (
                       (store.runtimeConfig?.modelProfiles ?? []).map((profile) => {
                         const active = profile.id === store.runtimeConfig?.defaultModelProfileId || (!store.runtimeConfig?.defaultModelProfileId && profile.id === currentModelProfile?.id);
@@ -898,6 +898,7 @@ type ContextMeter = {
   inputTokens?: number;
   outputTokens?: number;
   baseTokens?: number;
+  contextTokens?: number;
   measuredAt?: string;
 };
 
@@ -984,7 +985,7 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
     ? createPortal(
         <div
           ref={panelRef}
-          className="fixed z-[60] max-h-[min(320px,calc(100vh-96px))] overflow-auto rounded-[20px] border border-white/80 bg-white p-3 text-[12px] text-slate-600 shadow-[0_24px_70px_rgba(15,23,42,0.16)] ring-1 ring-slate-900/5"
+          className="hermes-context-popover fixed z-[60] max-h-[min(320px,calc(100vh-96px))] overflow-auto rounded-[20px] border border-white/80 bg-white p-3 text-[12px] text-slate-600 shadow-[0_24px_70px_rgba(15,23,42,0.16)] ring-1 ring-slate-900/5"
           style={{ right: panelPosition.right, bottom: panelPosition.bottom, width: panelPosition.width }}
         >
           <div className="flex items-center justify-between gap-3">
@@ -999,12 +1000,13 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
           <div className="mt-3 space-y-1.5">
             <ContextDetailRow label="当前占用" value={`${displayTokenLabel} tokens`} />
             <ContextDetailRow label="剩余窗口" value={remainingLabel} />
+            {typeof meter.contextTokens === "number" ? <ContextDetailRow label="实测 Prompt" value={`${meter.contextTokens.toLocaleString()} tokens`} /> : null}
             {typeof meter.inputTokens === "number" ? <ContextDetailRow label="最近输入" value={`${meter.inputTokens.toLocaleString()} tokens`} /> : null}
             {typeof meter.outputTokens === "number" ? <ContextDetailRow label="最近输出" value={`${meter.outputTokens.toLocaleString()} tokens`} /> : null}
             <ContextDetailRow label="当前草稿" value={`约 +${meter.draftTokens.toLocaleString()} tokens`} />
             <ContextDetailRow label="模型窗口上限" value={contextWindowLabel} />
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-slate-400">当前占用按 Hermes 最近一次 usage 的输入+输出计算，并叠加输入框草稿；缺少 usage 时使用本地估算。</p>
+          <p className="mt-2 text-[11px] leading-5 text-slate-400">有 Hermes 实测 Prompt 时按真实上下文占用计算，并叠加输入框草稿；缺少实测时使用本地估算。</p>
           {typeof meter.percent === "number" ? (
             <div className="mt-3">
               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">
@@ -1197,17 +1199,18 @@ function buildContextMeter(input: {
   const draftTokens = Math.max(0, estimateTokens(input.userInput) + attachmentOverhead);
   const fallbackTokens = Math.max(0, estimateTokens(`${historyText}\n${input.userInput}`) + attachmentOverhead);
   const actualBaseTokens = latestUsage
-    ? Math.max(latestUsage.totalTokens ?? 0, latestUsage.inputTokens + latestUsage.outputTokens)
+    ? Math.max(latestUsage.contextTokens ?? 0, latestUsage.totalTokens ?? 0, latestUsage.inputTokens + latestUsage.outputTokens)
     : undefined;
+  const effectiveContextWindow = latestUsage?.contextWindow ?? input.contextWindow;
   const usedTokens = actualBaseTokens !== undefined
     ? Math.max(0, actualBaseTokens + draftTokens)
     : fallbackTokens;
   const source = latestUsage?.source ?? "estimated";
-  const remainingTokens = input.contextWindow && input.contextWindow > 0
-    ? input.contextWindow - usedTokens
+  const remainingTokens = effectiveContextWindow && effectiveContextWindow > 0
+    ? effectiveContextWindow - usedTokens
     : undefined;
-  const percent = input.contextWindow && input.contextWindow > 0
-    ? Math.min(100, Math.round((usedTokens / input.contextWindow) * 100))
+  const percent = effectiveContextWindow && effectiveContextWindow > 0
+    ? Math.min(100, Math.round((usedTokens / effectiveContextWindow) * 100))
     : undefined;
   const tone = typeof percent !== "number"
     ? "slate"
@@ -1221,7 +1224,7 @@ function buildContextMeter(input: {
   return {
     usedTokens,
     draftTokens,
-    contextWindow: input.contextWindow,
+    contextWindow: effectiveContextWindow,
     remainingTokens,
     percent,
     tone,
@@ -1230,6 +1233,7 @@ function buildContextMeter(input: {
     inputTokens: latestUsage?.inputTokens,
     outputTokens: latestUsage?.outputTokens,
     baseTokens: actualBaseTokens,
+    contextTokens: latestUsage?.contextTokens,
     measuredAt: latestUsage?.at,
   };
 }
@@ -1251,7 +1255,7 @@ function latestUsageForSession(
   activeSessionId: string | undefined,
   eventsByRunId: ReturnType<typeof useAppStore.getState>["taskEventsByRunId"],
   insightUsage?: SessionAgentInsightUsage,
-): { inputTokens: number; outputTokens: number; totalTokens?: number; source: "actual" | "estimated"; at?: string } | undefined {
+): { inputTokens: number; outputTokens: number; totalTokens?: number; contextTokens?: number; contextWindow?: number; source: "actual" | "estimated"; at?: string } | undefined {
   const usageEvents = Object.values(eventsByRunId)
     .flat()
     .filter((event) => (!activeSessionId || event.workSessionId === activeSessionId) && event.event.type === "usage")
@@ -1263,6 +1267,8 @@ function latestUsageForSession(
       inputTokens: preferred.inputTokens,
       outputTokens: preferred.outputTokens,
       totalTokens: preferred.totalTokens,
+      contextTokens: preferred.contextTokens,
+      contextWindow: preferred.contextWindow,
       source: preferred.source === "actual" ? "actual" : "estimated",
       at: preferred.at,
     };
@@ -1271,7 +1277,9 @@ function latestUsageForSession(
   return {
     inputTokens: insightUsage.latestInputTokens,
     outputTokens: insightUsage.latestOutputTokens,
-    totalTokens: insightUsage.latestInputTokens + insightUsage.latestOutputTokens,
+    totalTokens: insightUsage.latestTotalTokens ?? insightUsage.latestInputTokens + insightUsage.latestOutputTokens,
+    contextTokens: insightUsage.latestContextTokens,
+    contextWindow: insightUsage.latestContextWindow,
     source: insightUsage.source === "actual" ? "actual" : "estimated",
   };
 }

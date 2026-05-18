@@ -63,7 +63,7 @@ export class HermesModelSyncService {
     const modelConfig: HermesModelConfig = {
       provider,
       model: chatRuntimeEnv.model,
-      baseUrl: persistedModelBaseUrl(chatProfile, chatRuntimeEnv),
+      baseUrl: persistedModelBaseUrl(chatProfile, chatRuntimeEnv, provider),
       contextLength: normalizeContextLength(chatProfile.maxTokens),
     };
     const roles: NonNullable<HermesModelSyncResult["roles"]> = {
@@ -248,7 +248,11 @@ function buildModelBlock(model: HermesModelConfig) {
   ].filter(Boolean).join("\n");
 }
 
-function persistedModelBaseUrl(profile: Pick<ModelProfile, "baseUrl">, runtimeEnv: EngineRuntimeEnv) {
+function persistedModelBaseUrl(profile: Pick<ModelProfile, "baseUrl">, runtimeEnv: EngineRuntimeEnv, hermesProvider?: string) {
+  if (hermesProvider === "minimax-cn") {
+    const minimaxBaseUrl = runtimeEnv.env.MINIMAX_BASE_URL?.trim() || runtimeEnv.env.ANTHROPIC_BASE_URL?.trim();
+    if (minimaxBaseUrl) return minimaxBaseUrl;
+  }
   return runtimeEnv.env.HERMES_FORGE_UPSTREAM_BASE_URL?.trim()
     || profile.baseUrl?.trim()
     || runtimeEnv.baseUrl;

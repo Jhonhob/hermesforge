@@ -44,6 +44,7 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
     runningTaskRunId: state.runningTaskRunId,
     runtimeConfig: state.runtimeConfig,
     sessionAgentInsight: state.sessionAgentInsight,
+    taskEventsByRunId: state.taskEventsByRunId,
     taskRunOrderBySession: state.taskRunOrderBySession,
     taskRunProjectionsById: state.taskRunProjectionsById,
     webUiOverview: state.webUiOverview,
@@ -74,9 +75,15 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
       ? modelProfile.temperature
       : 0.7;
   const activeEvents = useMemo(() => activeSessionEvents(store), [store.activeSessionId, store.events]);
+  const usageEvents = useMemo(() => {
+    if (!activeRun) return activeEvents;
+    const runEvents = store.taskEventsByRunId[activeRun.taskRunId]
+      ?? activeEvents.filter((event) => event.taskRunId === activeRun.taskRunId);
+    return runEvents.length ? runEvents : activeEvents;
+  }, [activeEvents, activeRun, store.taskEventsByRunId]);
   const permissionDiagnostics = useMemo(() => extractPermissionDiagnostics(activeEvents), [activeEvents]);
-  const usage = activeEvents.some((event) => event.event.type === "usage")
-    ? summarizeUsage(activeEvents, contextWindow)
+  const usage = usageEvents.some((event) => event.event.type === "usage")
+    ? summarizeUsage(usageEvents, contextWindow)
     : usageFromInsight(insight?.usage, contextWindow);
   const toolEvents = activeRun?.toolEvents ?? [];
   const toolCapabilities = buildToolCapabilities(toolEvents, activeEvents, Boolean(store.contextBundle || insight?.memory));
@@ -180,13 +187,13 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
           </button>
         </PanelCard>
 
-        <PanelCard title={usage.source === "actual" ? "Token 用量" : "Token 估算"} action={usage.hasUsage ? <StatusPill tone="green">{usage.source === "actual" ? "实测" : "约"} {formatCompactNumber(usage.totalTokens)}</StatusPill> : undefined}>
+        <PanelCard title={usage.source === "actual" ? "Token 用量" : "Token 估算"} action={usage.hasUsage ? <StatusPill tone="green">{usage.source === "actual" ? "实测" : "约"} {formatCompactNumber(usage.displayTokens)}</StatusPill> : undefined}>
           {usage.hasUsage ? (
             <>
               <div className="grid grid-cols-3 gap-2 text-[12px]">
                 <TokenMetric label={usage.source === "actual" ? "实测输入" : "估算输入"} value={formatExactNumber(usage.totalInput)} />
                 <TokenMetric label={usage.source === "actual" ? "实测输出" : "估算输出"} value={formatExactNumber(usage.totalOutput)} />
-                <TokenMetric label="估算费用" value={formatCost(usage.totalCost)} />
+                <TokenMetric label={usage.latestContextTokens ? "实测上下文" : "估算费用"} value={usage.latestContextTokens ? formatExactNumber(usage.latestContextTokens) : formatCost(usage.totalCost)} />
               </div>
               <div className="mt-3 flex items-center justify-between text-[12px]">
                 <span className="text-slate-500">本轮占用</span>
@@ -343,42 +350,65 @@ function summarizeUsage(events: TaskEventEnvelope[], contextWindow?: number) {
   const latestByTaskRun = new Map<string, Extract<EngineEvent, { type: "usage" }>>();
   for (const usageEvent of usageEvents) {
     const existing = latestByTaskRun.get(usageEvent.taskRunId);
-    if (!existing || usageEvent.event.at >= existing.at) {
+    if (!existing || prefersUsageEvent(usageEvent.event, existing)) {
       latestByTaskRun.set(usageEvent.taskRunId, usageEvent.event);
     }
   }
   const latestEvents = [...latestByTaskRun.values()];
   const totalInput = latestEvents.reduce((sum, event) => sum + event.inputTokens, 0);
   const totalOutput = latestEvents.reduce((sum, event) => sum + event.outputTokens, 0);
+  const totalTokens = latestEvents.reduce((sum, event) => sum + usageTotalTokens(event), 0);
   const totalCost = latestEvents.reduce((sum, event) => sum + event.estimatedCostUsd, 0);
-  const latest = latestEvents.sort((left, right) => right.at.localeCompare(left.at))[0];
-  const latestTotal = (latest?.inputTokens ?? 0) + (latest?.outputTokens ?? 0);
+  const latest = latestEvents.sort((left, right) => {
+    if ((left.source === "actual") !== (right.source === "actual")) return left.source === "actual" ? -1 : 1;
+    return right.at.localeCompare(left.at);
+  })[0];
+  const latestContextTokens = latest?.contextTokens;
+  const latestTotal = latest ? (latestContextTokens ?? usageTotalTokens(latest)) : 0;
+  const effectiveContextWindow = latest?.contextWindow ?? contextWindow;
   const latestSource = latest?.source ?? "estimated";
   return {
     hasUsage: usageEvents.length > 0,
     totalInput,
     totalOutput,
-    totalTokens: totalInput + totalOutput,
+    totalTokens,
+    displayTokens: latestTotal || totalTokens,
     totalCost,
     latestInput: latest?.inputTokens ?? 0,
     latestOutput: latest?.outputTokens ?? 0,
+    latestContextTokens,
     source: latestSource,
-    contextPercent: contextWindow ? Math.min(100, Math.round((latestTotal / contextWindow) * 100)) : 0,
+    contextPercent: effectiveContextWindow ? Math.min(100, Math.round((latestTotal / effectiveContextWindow) * 100)) : 0,
   };
 }
 
 function usageFromInsight(usage: SessionAgentInsightUsage | undefined, contextWindow?: number) {
+  const latestTotal = usage?.latestContextTokens ?? usage?.latestTotalTokens ?? (usage ? usage.latestInputTokens + usage.latestOutputTokens : 0);
   return {
     hasUsage: Boolean(usage),
     totalInput: usage?.totalInputTokens ?? 0,
     totalOutput: usage?.totalOutputTokens ?? 0,
-    totalTokens: (usage?.totalInputTokens ?? 0) + (usage?.totalOutputTokens ?? 0),
+    totalTokens: usage?.totalTokens ?? (usage?.totalInputTokens ?? 0) + (usage?.totalOutputTokens ?? 0),
+    displayTokens: latestTotal || (usage?.totalTokens ?? (usage?.totalInputTokens ?? 0) + (usage?.totalOutputTokens ?? 0)),
     totalCost: usage?.totalEstimatedCostUsd ?? 0,
     latestInput: usage?.latestInputTokens ?? 0,
     latestOutput: usage?.latestOutputTokens ?? 0,
+    latestContextTokens: usage?.latestContextTokens,
     source: usage?.source ?? "estimated",
-    contextPercent: contextWindow ? Math.min(100, Math.round((((usage?.latestInputTokens ?? 0) + (usage?.latestOutputTokens ?? 0)) / contextWindow) * 100)) : 0,
+    contextPercent: (usage?.latestContextWindow ?? contextWindow) ? Math.min(100, Math.round(((usage?.latestContextTokens ?? usage?.latestTotalTokens ?? ((usage?.latestInputTokens ?? 0) + (usage?.latestOutputTokens ?? 0))) / (usage?.latestContextWindow ?? contextWindow ?? 1)) * 100)) : 0,
   };
+}
+
+function prefersUsageEvent(next: Extract<EngineEvent, { type: "usage" }>, current: Extract<EngineEvent, { type: "usage" }>) {
+  if ((next.source === "actual") !== (current.source === "actual")) return next.source === "actual";
+  return next.at >= current.at;
+}
+
+function usageTotalTokens(usage: Extract<EngineEvent, { type: "usage" }>) {
+  return usage.totalTokens
+    ?? (usage.source === "actual" && typeof usage.contextTokens === "number"
+      ? usage.contextTokens + usage.outputTokens
+      : usage.inputTokens + usage.outputTokens);
 }
 
 function PermissionDiagnosticsView(props: { diagnostics: ReturnType<typeof extractPermissionDiagnostics>; runtimeConfig?: RuntimeConfig; overview?: PermissionOverview }) {

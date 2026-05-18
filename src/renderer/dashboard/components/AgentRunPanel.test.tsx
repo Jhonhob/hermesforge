@@ -119,13 +119,61 @@ describe("AgentRunPanel", () => {
 
     render(<AgentRunPanel open />);
 
-    expect(screen.getByText("约 2.5K")).toBeInTheDocument();
+    expect(screen.getByText("约 2K")).toBeInTheDocument();
     expect(screen.getByText("$0.01")).toBeInTheDocument();
     expect(screen.getByText("最近一次估算：1,200 in / 800 out")).toBeInTheDocument();
     expect(screen.getByText("38%")).toBeInTheDocument();
     expect(screen.getByText("48K / 128K")).toBeInTheDocument();
     expect(screen.getByText("当前会话主要讨论图像内容识别与模型信息查询。")).toBeInTheDocument();
     expect(screen.getByText("图像理解").parentElement).toHaveClass("bg-emerald-50");
+  });
+
+  it("prefers actual usage and the active run instead of stale estimates or session totals", () => {
+    useAppStore.setState({
+      runningTaskRunId: "task-2",
+      events: [
+        { taskRunId: "task-1", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9000, outputTokens: 1000, totalTokens: 10000, contextTokens: 10000, contextWindow: 128000, estimatedCostUsd: 0.02, message: "old actual", at: "2026-04-22T10:00:00.000Z" } },
+        { taskRunId: "task-2", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "estimated", inputTokens: 40, outputTokens: 15, totalTokens: 55, estimatedCostUsd: 0, message: "early estimate", at: "2026-04-22T10:00:01.000Z" } },
+        { taskRunId: "task-2", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9421, outputTokens: 519, totalTokens: 9940, contextTokens: 11981, contextWindow: 256000, estimatedCostUsd: 0.01, message: "actual", at: "2026-04-22T10:00:02.000Z" } },
+      ],
+      taskEventsByRunId: {
+        "task-2": [
+          { taskRunId: "task-2", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "estimated", inputTokens: 40, outputTokens: 15, totalTokens: 55, estimatedCostUsd: 0, message: "early estimate", at: "2026-04-22T10:00:01.000Z" } },
+          { taskRunId: "task-2", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9421, outputTokens: 519, totalTokens: 9940, contextTokens: 11981, contextWindow: 256000, estimatedCostUsd: 0.01, message: "actual", at: "2026-04-22T10:00:02.000Z" } },
+        ],
+      },
+      taskRunProjectionsById: {
+        "task-2": {
+          taskRunId: "task-2",
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          modelId: "gpt-5.4",
+          toolEvents: [],
+          startedAt: "2026-04-22T10:00:01.000Z",
+          updatedAt: "2026-04-22T10:00:02.000Z",
+          assistantMessage: {
+            id: "agent-task-2",
+            sessionId: "session-1",
+            taskId: "task-2",
+            role: "agent",
+            content: "done",
+            createdAt: "2026-04-22T10:00:02.000Z",
+            visibleInChat: true,
+          },
+        },
+      },
+      taskRunOrderBySession: { "session-1": ["task-1", "task-2"] },
+    });
+
+    render(<AgentRunPanel open />);
+
+    expect(screen.getByText("实测 12K")).toBeInTheDocument();
+    expect(screen.getByText("11,981")).toBeInTheDocument();
+    expect(screen.getByText("最近一次实测：9,421 in / 519 out")).toBeInTheDocument();
+    expect(screen.queryByText("约 55")).toBeNull();
+    expect(screen.queryByText("实测 22K")).toBeNull();
   });
 
   it("uses latest usage per task run instead of double-counting cumulative events", () => {

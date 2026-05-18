@@ -19,6 +19,7 @@ import type {
   HermesKanbanTaskActionInput,
   HermesKanbanTaskListOptions,
   HermesConnectorConfig,
+  HermesConnectorDisableInput,
   HermesConnectorListResult,
   HermesConnectorPlatformId,
   HermesConnectorSaveInput,
@@ -163,7 +164,7 @@ declare global {
       saveWebUiSettings(input: Partial<HermesWebUiSettings>): Promise<HermesWebUiSettings>;
       listConnectors(): Promise<HermesConnectorListResult>;
       saveConnector(input: HermesConnectorSaveInput): Promise<HermesConnectorConfig>;
-      disableConnector(platformId: HermesConnectorPlatformId): Promise<HermesConnectorConfig>;
+      disableConnector(input: HermesConnectorDisableInput): Promise<HermesConnectorConfig>;
       syncConnectorsEnv(): Promise<{ ok: boolean; envPath: string; message: string; connectors: HermesConnectorConfig[] }>;
       getGatewayStatus(): Promise<HermesGatewayStatus>;
       startGateway(): Promise<HermesGatewayActionResult>;

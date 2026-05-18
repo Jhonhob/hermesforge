@@ -245,6 +245,32 @@ describe("RuntimeEnvResolver", () => {
     expect(runtime.env.OPENAI_BASE_URL).toBeUndefined();
   });
 
+  it("upgrades MiniMax-M2 models from the old MiniMax endpoint to Token Plan runtime env", async () => {
+    const config: RuntimeConfig = {
+      defaultModelProfileId: "minimax-old",
+      modelProfiles: [{
+        id: "minimax-old",
+        provider: "custom",
+        sourceType: "minimax_api_key",
+        baseUrl: "https://api.minimax.chat/v1",
+        model: "MiniMax-M2.7",
+        secretRef: "provider.minimax.apiKey",
+      }],
+      updateSources: {},
+    };
+    const resolver = new RuntimeEnvResolver(
+      { read: async () => config } as never,
+      { readSecret: async () => "sk-minimax-test" } as never,
+    );
+
+    const runtime = await resolver.resolve();
+
+    expect(runtime.sourceType).toBe("minimax_token_plan_api_key");
+    expect(runtime.env.MINIMAX_BASE_URL).toBe("https://api.minimaxi.com/anthropic");
+    expect(runtime.env.ANTHROPIC_BASE_URL).toBe("https://api.minimaxi.com/anthropic");
+    expect(runtime.env.OPENAI_BASE_URL).toBeUndefined();
+  });
+
   it("exports MiMo Token Plan env and lets the runtime proxy adapt auth", async () => {
     const config: RuntimeConfig = {
       defaultModelProfileId: "mimo-token-plan",

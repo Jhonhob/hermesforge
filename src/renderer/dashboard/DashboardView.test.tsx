@@ -515,6 +515,61 @@ describe("DashboardView", () => {
     expect(screen.getAllByText("我们之前聊过 Hermes 的工作区和 MEMORY.md。").length).toBeGreaterThan(0);
   });
 
+  it("shows actual token usage in the message badge instead of the early estimate", () => {
+    useAppStore.setState((state) => ({
+      webUiOverview: state.webUiOverview ? {
+        ...state.webUiOverview,
+        settings: { ...state.webUiOverview.settings, showUsage: true },
+      } : state.webUiOverview,
+      taskRunProjectionsById: {
+        "task-usage": {
+          taskRunId: "task-usage",
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          modelId: "kimi-for-coding",
+          toolEvents: [],
+          startedAt: "2026-04-18T10:00:00.000Z",
+          updatedAt: "2026-04-18T10:00:03.000Z",
+          userMessage: {
+            id: "u-usage",
+            sessionId: "session-1",
+            taskId: "task-usage",
+            role: "user",
+            content: "帮我看看 token",
+            createdAt: "2026-04-18T10:00:00.000Z",
+            visibleInChat: true,
+          },
+          assistantMessage: {
+            id: "a-usage",
+            sessionId: "session-1",
+            taskId: "task-usage",
+            role: "agent",
+            content: "这次应该显示真实 token。",
+            status: "complete",
+            actualEngine: "hermes",
+            authorName: "Hermes",
+            createdAt: "2026-04-18T10:00:01.000Z",
+            visibleInChat: true,
+          },
+        },
+      },
+      taskRunOrderBySession: { "session-1": ["task-usage"] },
+      taskEventsByRunId: {
+        "task-usage": [
+          { taskRunId: "task-usage", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9421, outputTokens: 519, totalTokens: 9940, contextTokens: 11981, contextWindow: 256000, estimatedCostUsd: 0.01, message: "actual", at: "2026-04-18T10:00:03.000Z" } },
+          { taskRunId: "task-usage", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "estimated", inputTokens: 40, outputTokens: 15, totalTokens: 55, estimatedCostUsd: 0, message: "estimate", at: "2026-04-18T10:00:01.000Z" } },
+        ],
+      },
+    }));
+
+    renderView();
+
+    expect(screen.getByText("实测 9,940 token")).toBeInTheDocument();
+    expect(screen.queryByText("约 55 token")).toBeNull();
+  });
+
   it("shows a typing state instead of raw placeholder text while waiting", () => {
     useAppStore.setState({
       taskRunProjectionsById: {

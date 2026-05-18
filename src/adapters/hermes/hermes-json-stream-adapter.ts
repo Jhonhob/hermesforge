@@ -14,7 +14,7 @@ export type ParsedJsonEvent =
   | { type: "clarify"; question: string; choices?: string[]; session_id?: string; timestamp: string }
   | { type: "status"; level?: string; message: string; session_id?: string; timestamp: string }
   | { type: "progress"; step: string; done?: boolean; message: string; session_id?: string; timestamp: string }
-  | { type: "usage"; source?: string; input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; estimated_cost_usd?: number; session_id?: string; timestamp: string }
+  | { type: "usage"; source?: string; input_tokens?: number; output_tokens?: number; total_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number; context_tokens?: number; context_window?: number; context_percent?: number; estimated_cost_usd?: number; cost_source?: string; session_id?: string; timestamp: string }
   | { type: "session_update"; session_id: string; previous_session_id?: string; title?: string; message_count?: number; model?: string; timestamp: string }
   | { type: "result"; success: boolean; content: string; session_id?: string; timestamp: string }
   | { type: "error"; message: string; error_type?: string; traceback?: string; session_id?: string; timestamp: string }
@@ -129,12 +129,20 @@ function toEngineEvent(parsed: ParsedJsonEvent): EngineEvent | undefined {
         inputTokens,
         outputTokens,
         totalTokens,
-        promptTokens: numberFrom(parsed, "prompt_tokens"),
-        completionTokens: numberFrom(parsed, "completion_tokens"),
-        cacheReadTokens: numberFrom(parsed, "cache_read_tokens"),
-        cacheWriteTokens: numberFrom(parsed, "cache_write_tokens"),
-        reasoningTokens: numberFrom(parsed, "reasoning_tokens"),
-        estimatedCostUsd: numberFrom(parsed, "estimated_cost_usd") ?? 0,
+        promptTokens: numberFrom(parsed, "prompt_tokens") ?? numberFrom(parsed, "promptTokens") ?? numberFrom(parsed, "promptTokenCount"),
+        completionTokens: numberFrom(parsed, "completion_tokens") ?? numberFrom(parsed, "completionTokens") ?? numberFrom(parsed, "completionTokenCount"),
+        cacheReadTokens: numberFrom(parsed, "cache_read_tokens") ?? numberFrom(parsed, "cacheReadTokens"),
+        cacheWriteTokens: numberFrom(parsed, "cache_write_tokens") ?? numberFrom(parsed, "cacheWriteTokens"),
+        reasoningTokens: numberFrom(parsed, "reasoning_tokens") ?? numberFrom(parsed, "reasoningTokens"),
+        contextTokens: numberFrom(parsed, "context_tokens") ?? numberFrom(parsed, "contextTokens") ?? numberFrom(parsed, "last_prompt_tokens"),
+        contextWindow: numberFrom(parsed, "context_window") ?? numberFrom(parsed, "contextWindow") ?? numberFrom(parsed, "context_length"),
+        contextPercent: numberFrom(parsed, "context_percent") ?? numberFrom(parsed, "contextPercent"),
+        costSource: typeof (parsed as Record<string, unknown>).cost_source === "string"
+          ? String((parsed as Record<string, unknown>).cost_source)
+          : typeof (parsed as Record<string, unknown>).costSource === "string"
+            ? String((parsed as Record<string, unknown>).costSource)
+            : undefined,
+        estimatedCostUsd: numberFrom(parsed, "estimated_cost_usd") ?? numberFrom(parsed, "estimatedCostUsd") ?? 0,
         source,
         message: source === "actual"
           ? `实测 Token：输入 ${inputTokens}，输出 ${outputTokens}。`

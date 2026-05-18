@@ -288,12 +288,7 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
   const eventsForRun = useAppStore((state) => state.taskEventsByRunId[run.taskRunId]) ?? EMPTY_EVENTS;
   const showUsage = useAppStore((state) => state.webUiOverview?.settings.showUsage);
   const content = run.assistantMessage.content.trim();
-  const usage = useMemo(() => {
-    for (let i = eventsForRun.length - 1; i >= 0; i--) {
-      if (eventsForRun[i].event.type === "usage") return eventsForRun[i].event as Extract<EngineEvent, { type: "usage" }>;
-    }
-    return undefined;
-  }, [eventsForRun]);
+  const usage = useMemo(() => preferredUsageForRun(eventsForRun), [eventsForRun]);
   const thoughtStatus = useMemo(() => buildThoughtStatus(run, eventsForRun), [run, eventsForRun]);
   const waiting = !content && (run.status === "pending" || run.status === "routing" || run.status === "running" || run.status === "streaming");
   const softStreaming = Boolean(content) && run.status === "streaming";
@@ -333,7 +328,7 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
               <ElapsedTimePill startedAt={run.startedAt} completedAt={run.completedAt} active={activeTiming} />
               {showUsage && usage?.type === "usage" ? (
                 <MessageMetaPill tone="emerald">
-                  {usage.source === "actual" ? "实测" : "约"} {usage.inputTokens}+{usage.outputTokens} token
+                  {usage.source === "actual" ? "实测" : "约"} {displayUsageTokens(usage)} token
                 </MessageMetaPill>
               ) : null}
               {usage?.reasoningTokens ? (
@@ -404,6 +399,29 @@ type ThoughtStatus = {
   tone: "slate" | "emerald" | "amber" | "rose" | "purple";
   phase: "preparing" | "thinking" | "tool" | "replying";
 };
+
+function preferredUsageForRun(eventsForRun: TaskEventEnvelope[]) {
+  const usageEvents = eventsForRun
+    .map((event) => event.event)
+    .filter((event): event is Extract<EngineEvent, { type: "usage" }> => event.type === "usage");
+  const actualEvents = usageEvents.filter((event) => event.source === "actual");
+  return latestUsageEvent(actualEvents.length ? actualEvents : usageEvents);
+}
+
+function latestUsageEvent(events: Array<Extract<EngineEvent, { type: "usage" }>>) {
+  return events.reduce<Extract<EngineEvent, { type: "usage" }> | undefined>((latest, event) => {
+    if (!latest) return event;
+    return event.at >= latest.at ? event : latest;
+  }, undefined);
+}
+
+function displayUsageTokens(usage: Extract<EngineEvent, { type: "usage" }>) {
+  const total = usage.totalTokens
+    ?? (usage.source === "actual" && typeof usage.contextTokens === "number"
+      ? usage.contextTokens + usage.outputTokens
+      : usage.inputTokens + usage.outputTokens);
+  return total.toLocaleString();
+}
 
 function buildThoughtStatus(run: TaskRunProjection, events: TaskEventEnvelope[]): ThoughtStatus {
   const active = run.status === "pending" || run.status === "routing" || run.status === "running" || run.status === "streaming";

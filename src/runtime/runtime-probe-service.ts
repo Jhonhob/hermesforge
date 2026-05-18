@@ -276,9 +276,6 @@ export class RuntimeProbeService {
     } else if (!input.hermesCliExists) {
       add("hermes_cli_missing", "error", "Hermes CLI 文件不存在。", undefined, "Hermes Agent 未安装或路径不存在，请重新安装 / 修复安装。");
     }
-    if (!input.bridge.reachable) {
-      add(input.bridge.running ? "bridge_unreachable" : "bridge_disabled", "warning", "Windows Control Bridge 不可达。", input.bridge.message, "Bridge 不应阻断 Windows Native Hermes CLI 检测；需要桌面控制能力时再重启客户端或刷新 Bridge。");
-    }
     return issues;
   }
 

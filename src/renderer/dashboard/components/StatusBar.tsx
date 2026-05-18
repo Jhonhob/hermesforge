@@ -32,10 +32,7 @@ export function StatusBar() {
   }, [statusSource.clientInfo]);
 
   useEffect(() => {
-    setHermesStatus((current) => {
-      const resolved = resolveHermesConnection(statusSource.hermesProbe, statusSource.hermesStatus);
-      return current === "checking" || current === "disconnected" ? resolved : current;
-    });
+    setHermesStatus(resolveHermesConnection(statusSource.hermesProbe, statusSource.hermesStatus));
   }, [statusSource.hermesProbe, statusSource.hermesStatus]);
 
   useEffect(() => window.workbenchClient?.onClientUpdateEvent?.((event) => setClientUpdate(event)), []);
@@ -221,10 +218,16 @@ function connectionTone(status: ConnectionState): BadgeTone {
 
 function hermesDetail(status: ConnectionState, probe?: HermesProbeSummary, summary?: HermesStatusSummary, runtimeMode?: "windows" | "wsl" | "darwin") {
   const runtimeLabel = runtimeMode === "wsl" ? "WSL" : runtimeMode === "windows" ? "Windows" : runtimeMode === "darwin" ? "macOS" : undefined;
-  const base = probe?.probe.message?.trim()
+  const probeMessage = probe?.probe.message?.trim();
+  const probeDetail = isBridgeNoise(probeMessage) ? undefined : probeMessage;
+  const base = probeDetail
     || summary?.engine?.message?.trim()
     || (status === "connected" ? "Hermes 在线" : status === "warning" ? "Hermes 可用，但存在警告" : status === "disconnected" ? "Hermes 离线" : "正在检查 Hermes");
   return runtimeLabel ? `${base} · 当前运行：${runtimeLabel}` : base;
+}
+
+function isBridgeNoise(message?: string) {
+  return Boolean(message && /Windows Control Bridge 不可达|Bridge 本机 health 不可访问|Windows Control Bridge 未启动|Bridge access 信息不可用/i.test(message));
 }
 
 function hermesIcon(status: ConnectionState) {

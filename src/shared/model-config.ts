@@ -100,6 +100,9 @@ const CANONICAL_MODELS_BY_SOURCE: Partial<Record<ModelSourceType, string[]>> = {
 
 export function normalizeSourceTypeForProfile(input: { sourceType?: ModelSourceType | string; baseUrl?: string; model?: string }): ModelSourceType | undefined {
   const current = normalizeSourceType(input.sourceType);
+  if (current === "minimax_api_key" && /^MiniMax-M2(?:\.|$)/i.test(input.model?.trim() ?? "")) {
+    return "minimax_token_plan_api_key";
+  }
   const inferred = inferSourceTypeFromEndpoint(input.baseUrl);
   if (inferred && (!current || current === "openai_compatible" || current === "legacy")) {
     return inferred;

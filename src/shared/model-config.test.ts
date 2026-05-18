@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateRuntimeConfigModels, normalizeOpenAiCompatibleBaseUrl, requiresStoredSecret, resolveHermesProvider, stableModelProfileId } from "./model-config";
+import { migrateRuntimeConfigModels, normalizeOpenAiCompatibleBaseUrl, normalizeSourceTypeForProfile, requiresStoredSecret, resolveHermesProvider, stableModelProfileId } from "./model-config";
 import type { ModelProfile } from "./types";
 
 describe("model config helpers", () => {
@@ -115,6 +115,14 @@ describe("model config helpers", () => {
       model: "kimi-for-coding",
     });
     expect(migrated.defaultModelProfileId).toBe(migrated.modelProfiles[0].id);
+  });
+
+  it("treats MiniMax-M2 models as MiniMax Token Plan even from the old MiniMax source", () => {
+    expect(normalizeSourceTypeForProfile({
+      sourceType: "minimax_api_key",
+      baseUrl: "https://api.minimax.chat/v1",
+      model: "MiniMax-M2.7",
+    })).toBe("minimax_token_plan_api_key");
   });
 
   it("maps MiMo sources to the Hermes Xiaomi provider instead of custom", () => {

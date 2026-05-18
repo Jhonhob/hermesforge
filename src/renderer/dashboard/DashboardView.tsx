@@ -169,7 +169,7 @@ export function DashboardView(props: {
   }
 
   return (
-    <section className="absolute inset-0 flex overflow-hidden bg-[#f6f8fb] text-slate-900">
+    <section className="hermes-dashboard-root absolute inset-0 flex overflow-hidden bg-[#f6f8fb] text-slate-900">
       <IconRail />
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         <HermesHeader
