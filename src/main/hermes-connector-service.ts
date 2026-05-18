@@ -150,9 +150,21 @@ const PLATFORM_REGISTRY: HermesConnectorPlatform[] = [
   platform("feishu", "Feishu", "official", "飞书机器人/应用接入。", [
     text("appId", "FEISHU_APP_ID", "App ID", true),
     password("appSecret", "FEISHU_APP_SECRET", "App Secret", true),
+    text("domain", "FEISHU_DOMAIN", "Domain", false, "feishu"),
+    text("connectionMode", "FEISHU_CONNECTION_MODE", "连接模式", false, "websocket"),
+    bool("allowAllUsers", "FEISHU_ALLOW_ALL_USERS", "允许所有私聊用户", false),
     text("allowedUsers", "FEISHU_ALLOWED_USERS", "允许用户", false),
+    text("groupPolicy", "FEISHU_GROUP_POLICY", "群聊策略", false, "open"),
+    bool("requireMention", "FEISHU_REQUIRE_MENTION", "群聊需 @ 机器人", false),
+    text("allowBots", "FEISHU_ALLOW_BOTS", "允许机器人消息", false, "none / mentions / all"),
+    text("botOpenId", "FEISHU_BOT_OPEN_ID", "Bot Open ID", false, "ou_xxx"),
+    text("botUserId", "FEISHU_BOT_USER_ID", "Bot User ID", false),
+    text("botName", "FEISHU_BOT_NAME", "Bot 名称", false),
+    password("encryptKey", "FEISHU_ENCRYPT_KEY", "Webhook Encrypt Key", false),
+    password("verificationToken", "FEISHU_VERIFICATION_TOKEN", "Webhook Verification Token", false),
+    text("agentMapping", "FEISHU_AGENT_MAPPING", "Hermes Agent 映射", false, "agent-a=cli_xxx,agent-b=cli_yyy"),
     text("homeChannel", "FEISHU_HOME_CHANNEL", "Home Channel", false),
-  ], ["本机 Hermes 源码已包含 Feishu 平台配置；按飞书开放平台应用凭据填写。"]),
+  ], ["对齐 `hermes gateway setup`：App ID / App Secret + WebSocket 为默认推荐。", "私聊默认走配对审批：FEISHU_ALLOW_ALL_USERS=false；群聊默认 open 且需要 @ 机器人。", "Hermes 官方飞书适配器当前仍是单机器人模式；Agent 映射字段会写入 .env，供后续多实例/自定义路由使用。"]),
   platform("homeassistant", "Home Assistant", "official", "Home Assistant Assist pipeline 集成。", [
     url("url", "HASS_URL", "Home Assistant URL", true, "http://homeassistant.local:8123"),
     password("token", "HASS_TOKEN", "Long-Lived Access Token", true),
@@ -195,10 +207,13 @@ const PLATFORM_REGISTRY: HermesConnectorPlatform[] = [
     text("allowedUsers", "SMS_ALLOWED_USERS", "允许用户", false),
   ], ["SMS 具体依赖取决于 Hermes 安装的短信适配器。"]),
   platform("qqbot", "QQ Bot", "advanced", "QQ Bot 平台配置入口。", [
+    text("appId", "QQ_APP_ID", "App ID", true),
+    password("clientSecret", "QQ_CLIENT_SECRET", "App Secret", true),
+    bool("allowAllUsers", "QQ_ALLOW_ALL_USERS", "允许所有私聊用户", false),
     text("allowedUsers", "QQ_ALLOWED_USERS", "允许用户", false),
     text("groupAllowedUsers", "QQ_GROUP_ALLOWED_USERS", "群聊允许用户", false),
-    text("homeChannel", "QQ_HOME_CHANNEL", "Home Channel", false),
-  ], ["QQ Bot 具体凭据字段取决于 Hermes 适配器版本。"]),
+    text("homeChannel", "QQBOT_HOME_CHANNEL", "Home Channel", false),
+  ], ["对齐 `hermes gateway setup`：QQ_APP_ID 和 QQ_CLIENT_SECRET 是最小必填。", "Gateway 仍兼容旧的 QQ_HOME_CHANNEL，但 Forge 会写入官方推荐的 QQBOT_HOME_CHANNEL。"]),
 ];
 
 export class HermesConnectorService {

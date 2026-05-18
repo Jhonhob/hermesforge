@@ -146,6 +146,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
     } catch (error) {
       setMessage("依赖修复失败");
       setDetail(error instanceof Error ? error.message : "未知错误");
+      await refreshSetupChecks();
     } finally {
       setRepairingDependency(undefined);
     }
@@ -198,6 +199,7 @@ export function WelcomePage(props: { onComplete: () => void }) {
       setProgress(0);
       setMessage("Hermes 自动安装失败，请改用手动配置或重试");
       setDetail(error instanceof Error ? error.message : "未知错误");
+      void refreshSetupChecks();
     }
   }
 

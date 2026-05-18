@@ -5,6 +5,10 @@ import type { ContextBundle, EngineEvent, SessionMessage, StreamEvent, TaskEvent
 const MAX_EVENT_LOGS = 240;
 const MAX_CONVERSATION_MESSAGES = 160;
 const MAX_TASK_EVENTS_PER_RUN = 800;
+const EMPTY_HERMES_RESULT_MESSAGES = [
+  "Hermes 已运行，但没有返回可显示的内容。",
+  "Hermes 已运行，但没有返回可显示的模型正文。请在右侧“查看过程”检查模型配置、Hermes 日志，或导出诊断报告。",
+];
 
 export interface TaskState {
   runningSessionId?: string;
@@ -234,8 +238,14 @@ function applyEngineEventToProjection(projection: TaskRunProjection, envelope: T
 function chooseFinalAssistantContent(streamed: string, resultContent: string, hasStreamedAssistantText: boolean) {
   if (!streamed) return resultContent;
   if (!resultContent) return streamed;
+  if (hasStreamedAssistantText && isEmptyHermesResultMessage(resultContent)) return streamed;
   if (!hasStreamedAssistantText) return resultContent;
   return streamed.length > resultContent.length ? streamed : resultContent;
+}
+
+function isEmptyHermesResultMessage(content: string) {
+  const normalized = content.trim();
+  return EMPTY_HERMES_RESULT_MESSAGES.some((message) => normalized === message);
 }
 
 function normalizeStatus(status: unknown): TaskRunStatus {

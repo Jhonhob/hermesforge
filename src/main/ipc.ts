@@ -22,6 +22,7 @@ import type { SecretVault } from "../auth/secret-vault";
 import type { DiagnosticsService } from "../diagnostics/diagnostics-service";
 import type { FileTreeService } from "../file-manager/file-tree-service";
 import type { SnapshotManager } from "../process/snapshot-manager";
+import type { TaskPreflightService } from "../process/task-preflight-service";
 import type { TaskRunner } from "../process/task-runner";
 import type { WorkspaceLock } from "../process/workspace-lock";
 import type { EngineProbeService } from "../probes/engine-probe-service";
@@ -271,6 +272,7 @@ export type IpcServices = {
   runtimeEnvResolver: RuntimeEnvResolver;
   secretVault: SecretVault;
   setupService: SetupService;
+  preflightService: TaskPreflightService;
   diagnosticsService: DiagnosticsService;
   hermesWebUiService: HermesWebUiService;
   hermesConnectorService: HermesConnectorService;
@@ -284,9 +286,24 @@ export type IpcServices = {
 };
 
 export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcServices) {
+  function invalidateTaskPreflight(reason: string) {
+    services.preflightService.invalidateCaches();
+    console.info("[Hermes Forge] Task preflight cache invalidated", { reason });
+  }
+
+  async function withTaskPreflightInvalidation<T>(reason: string, operation: () => Promise<T> | T): Promise<T> {
+    invalidateTaskPreflight(`${reason}:before`);
+    try {
+      return await operation();
+    } finally {
+      invalidateTaskPreflight(`${reason}:after`);
+    }
+  }
+
   async function writeRuntimeConfigWithModelSync(nextConfig: RuntimeConfig, forceModelSync = false) {
     const previous = await services.configStore.read();
     const saved = await services.configStore.write(nextConfig);
+    invalidateTaskPreflight("runtime-config-write");
     if (forceModelSync || modelRuntimeChanged(previous, saved)) {
       try {
         const sync = await services.hermesModelSyncService.syncRuntimeConfig(saved);
@@ -633,18 +650,24 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
   });
 
   ipcMain.handle(IpcChannels.updateHermes, (event) =>
-    services.setupService.updateHermes((payload) => {
-      event.sender.send(IpcChannels.installHermesEvent, payload);
-    }),
+    withTaskPreflightInvalidation("update-hermes", () =>
+      services.setupService.updateHermes((payload) => {
+        event.sender.send(IpcChannels.installHermesEvent, payload);
+      }),
+    ),
   );
   ipcMain.handle(IpcChannels.installHermes, (event, input?: unknown) =>
-    services.setupService.installHermes((payload) => {
-      event.sender.send(IpcChannels.installHermesEvent, payload);
-    }, installHermesOptionsSchema.parse(input ?? undefined)),
+    withTaskPreflightInvalidation("install-hermes", () =>
+      services.setupService.installHermes((payload) => {
+        event.sender.send(IpcChannels.installHermesEvent, payload);
+      }, installHermesOptionsSchema.parse(input ?? undefined)),
+    ),
   );
   ipcMain.handle(IpcChannels.cancelInstallHermes, () => services.setupService.cancelInstallHermes());
   ipcMain.handle(IpcChannels.repairSetupDependency, (_event, id: unknown) =>
-    services.setupService.repairDependency(setupDependencyRepairIdSchema.parse(id)),
+    withTaskPreflightInvalidation("repair-setup-dependency", () =>
+      services.setupService.repairDependency(setupDependencyRepairIdSchema.parse(id)),
+    ),
   );
   ipcMain.handle(IpcChannels.getRuntimeConfig, () => readRuntimeConfigWithModelFallback(services));
   ipcMain.handle(IpcChannels.listModelProviders, () => defaultProviderRegistry.definitions());
@@ -724,7 +747,7 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
     const parsed = updateHermesConfigSchema.parse(input);
     const config = await services.configStore.read();
     const runtimeMode = parsed.runtime?.mode ?? config.hermesRuntime?.mode ?? "windows";
-    return services.configStore.write({
+    const saved = await services.configStore.write({
       ...config,
       startupWarmupMode: parsed.warmupMode ?? config.startupWarmupMode,
       enginePaths: {
@@ -758,6 +781,8 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
           : config.hermesRuntime?.installSource,
       },
     });
+    invalidateTaskPreflight("update-hermes-config");
+    return saved;
   });
   ipcMain.handle(IpcChannels.updateModelConfig, async (_event, input) => {
     const parsed = updateModelConfigSchema.parse(input);
@@ -808,6 +833,7 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
     let saved: RuntimeConfig;
     try {
       saved = await services.configStore.write(next);
+      invalidateTaskPreflight("set-default-model");
       console.info("[Hermes Forge] set default model save result", {
         configPath,
         previousDefaultModelId: previous.defaultModelProfileId,
@@ -885,6 +911,7 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
     const config = await services.configStore.read();
     const sync = await services.hermesModelSyncService.syncRuntimeConfig(config);
     if (sync.synced) await restartGatewayIfRunning(services);
+    invalidateTaskPreflight("sync-hermes-model-runtime");
     return sync;
   });
   ipcMain.handle(IpcChannels.testModelRuntimeRole, async (_event, input) => {
@@ -1004,11 +1031,17 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
 
   ipcMain.handle(IpcChannels.getSetupSummary, (_event, workspacePath?: string) => services.setupService.getSummary(workspacePath));
   ipcMain.handle(IpcChannels.getSecretStatus, () => services.secretVault.status());
-  ipcMain.handle(IpcChannels.saveSecret, (_event, input) => {
+  ipcMain.handle(IpcChannels.saveSecret, async (_event, input) => {
     const parsed = secretSaveInputSchema.parse(input);
-    return services.secretVault.saveSecret(parsed.ref, parsed.plainText);
+    const result = await services.secretVault.saveSecret(parsed.ref, parsed.plainText);
+    invalidateTaskPreflight("save-secret");
+    return result;
   });
-  ipcMain.handle(IpcChannels.deleteSecret, (_event, ref: string) => services.secretVault.deleteSecret(secretRefSchema.parse(ref)));
+  ipcMain.handle(IpcChannels.deleteSecret, async (_event, ref: string) => {
+    const result = await services.secretVault.deleteSecret(secretRefSchema.parse(ref));
+    invalidateTaskPreflight("delete-secret");
+    return result;
+  });
   ipcMain.handle(IpcChannels.hasSecret, async (_event, ref: string) => {
     const parsed = secretRefSchema.parse(ref);
     return { ref: parsed, exists: await services.secretVault.hasSecret(parsed) };
@@ -1034,7 +1067,9 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
     return { ok: true };
   });
   ipcMain.handle(IpcChannels.oneClickDiagnosticsRun, (_event, input) =>
-    services.oneClickDiagnosticsOrchestrator.run(oneClickDiagnosticsRunOptionsSchema.parse(input ?? {})),
+    withTaskPreflightInvalidation("one-click-diagnostics", () =>
+      services.oneClickDiagnosticsOrchestrator.run(oneClickDiagnosticsRunOptionsSchema.parse(input ?? {})),
+    ),
   );
   ipcMain.handle(IpcChannels.oneClickDiagnosticsExport, (_event, workspacePath?: string) =>
     services.oneClickDiagnosticsOrchestrator.exportLatest(workspacePath),

@@ -1,5 +1,38 @@
 # Release Notes
 
+## Hermes Forge v0.2.19
+
+发布日期：2026-05-18
+
+这是一次连接器对齐、消息恢复与品牌图标修复版本。重点解决用户反馈的飞书配置与 Hermes CLI 行为不一致、一键修复失败后无法继续发消息，以及 Windows 图标边缘不透明的问题。
+
+### 核心修复
+
+- **修复一键修复后无法继续发消息**：Hermes 安装、更新、一键诊断、依赖修复、模型与密钥配置变更后会立即清理任务预检缓存，避免旧的 Hermes 不可用状态继续阻塞发送。
+- **启动失败不再吞掉用户输入**：任务启动前检查失败时会释放运行锁、刷新 Hermes 状态，并恢复用户刚输入的内容，用户可以直接调整后重试。
+- **修复空结果覆盖已流式输出**：当 Hermes 已有流式回复但最终结果为空时，不再用“已运行但没有返回可显示内容”覆盖真实输出。
+- **增强 Windows Agent 结果解析**：兼容 `final_response`、`response`、`content`、`message`、`output`、`text` 以及消息数组中的最终文本，减少误判空内容。
+
+### 新增功能
+
+- **飞书连接器对齐 Hermes CLI**：补齐 `FEISHU_ALLOW_ALL_USERS`，默认 WebSocket、私聊配对审批、群聊 open 且需要 @ 机器人。
+- **QQ Bot 连接器对齐 Hermes CLI**：补齐 `QQ_APP_ID`、`QQ_CLIENT_SECRET`、`QQ_ALLOW_ALL_USERS`，并改用 Gateway 推荐的 `QQBOT_HOME_CHANNEL`。
+- **飞书身份与 Agent 映射字段**：新增 Bot Open ID、Bot User ID、Bot 名称、Webhook 加密字段和 `FEISHU_AGENT_MAPPING` 写入能力，为后续多实例路由预留。
+
+### 体验调整
+
+- **连接器配置提示更准确**：微信、QQ、飞书的最小必填项、默认策略和高级字段说明与 Hermes Gateway 实际读取逻辑保持一致。
+- **程序图标重绘**：替换 PNG、ICO、ICNS 图标资源，修复旧图标未抠透明背景导致的视觉粗糙问题。
+- **修复失败后刷新状态**：设置页和欢迎页的修复/安装失败路径也会刷新 setup 检查，避免页面停留在旧状态。
+
+### 验证
+
+- `npm run check` 通过
+- `npm test` 通过，46 个测试文件、332 个测试全部成功
+- `npm run build` 通过
+- `npm run package:portable` 通过
+- 微信、QQ、飞书最小环境变量已通过本机 Hermes Gateway 配置加载验证
+
 ## Hermes Forge v0.2.18
 
 发布日期：2026-05-13

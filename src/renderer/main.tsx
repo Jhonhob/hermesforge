@@ -242,6 +242,14 @@ function SettingsView(props: {
     showSaveNotice(result.message);
   }
 
+  async function refreshAfterMaintenanceAttempt() {
+    try {
+      await props.onRefresh();
+    } catch (error) {
+      console.warn("Failed to refresh setup state after maintenance:", error);
+    }
+  }
+
   async function installHermesToCurrentPath() {
     if (setupActionRunning) return;
     setSetupActionRunning("hermes");
@@ -253,6 +261,7 @@ function SettingsView(props: {
       showSaveNotice(result.message);
     } catch (error) {
       showSaveNotice(error instanceof Error ? error.message : "Hermes 自动安装失败");
+      await refreshAfterMaintenanceAttempt();
     } finally {
       setSetupActionRunning(undefined);
     }
@@ -297,6 +306,7 @@ function SettingsView(props: {
       showSaveNotice(autoFix ? "一键修复已完成并完成二次验证" : "一键诊断已完成");
     } catch (error) {
       showSaveNotice(error instanceof Error ? error.message : "一键诊断失败");
+      await refreshAfterMaintenanceAttempt();
     } finally {
       setOneClickDiagnosticsRunning(false);
     }
@@ -333,6 +343,7 @@ function SettingsView(props: {
         showSaveNotice(result.message);
       } catch (error) {
         showSaveNotice(error instanceof Error ? error.message : "依赖修复失败");
+        await refreshAfterMaintenanceAttempt();
       } finally {
         setRepairingDependency(undefined);
       }
@@ -349,6 +360,7 @@ function SettingsView(props: {
         showSaveNotice(result.message);
       } catch (error) {
         showSaveNotice(error instanceof Error ? error.message : "Hermes 自动安装失败");
+        await refreshAfterMaintenanceAttempt();
       } finally {
         setSetupActionRunning(undefined);
       }
@@ -363,6 +375,7 @@ function SettingsView(props: {
         showSaveNotice(result.message);
       } catch (error) {
         showSaveNotice(error instanceof Error ? error.message : "Hermes 更新失败");
+        await refreshAfterMaintenanceAttempt();
       } finally {
         setSetupActionRunning(undefined);
       }
@@ -1397,6 +1410,10 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Hermes 启动前检查失败。";
       store.finalizeTaskRun(clientTaskId, { status: "failed", content: humanizeStartFailure(message) });
+      const latest = useAppStore.getState();
+      if (latest.runningTaskRunId === clientTaskId) store.setRunningTaskRunId(undefined);
+      if (latest.runningSessionId === clientTaskId) store.setRunningSessionId(undefined);
+      if (!latest.userInput.trim()) store.setUserInput(prompt);
       store.pushEvent({
         taskRunId: "preflight",
         workSessionId: activeSessionId,
@@ -1404,7 +1421,7 @@ function App() {
         engineId: "hermes",
         event: { type: "status", level: "error", message, at: new Date().toISOString() },
       });
-      await refreshSetupSummary();
+      await Promise.all([refreshSetupSummary(), refreshHermesStatus()]);
       openFixTarget(fixTargetForFailure(message, useAppStore.getState().setupSummary?.blocking[0]?.fixAction));
       return;
     }

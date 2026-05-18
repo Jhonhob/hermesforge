@@ -23,6 +23,7 @@ describe("HermesConnectorService helpers", () => {
       "wecom_callback",
       "weixin",
       "bluebubbles",
+      "qqbot",
     ]));
     expect(testOnly.PLATFORM_REGISTRY.find((platform) => platform.id === "slack")?.fields.map((field) => field.envVar)).toEqual(expect.arrayContaining([
       "SLACK_BOT_TOKEN",
@@ -33,6 +34,23 @@ describe("HermesConnectorService helpers", () => {
       "WEIXIN_TOKEN",
       "WEIXIN_DM_POLICY",
       "WEIXIN_GROUP_POLICY",
+    ]));
+    expect(testOnly.PLATFORM_REGISTRY.find((platform) => platform.id === "feishu")?.fields.map((field) => field.envVar)).toEqual(expect.arrayContaining([
+      "FEISHU_APP_ID",
+      "FEISHU_APP_SECRET",
+      "FEISHU_DOMAIN",
+      "FEISHU_CONNECTION_MODE",
+      "FEISHU_ALLOW_ALL_USERS",
+      "FEISHU_BOT_OPEN_ID",
+      "FEISHU_AGENT_MAPPING",
+    ]));
+    expect(testOnly.PLATFORM_REGISTRY.find((platform) => platform.id === "qqbot")?.fields.map((field) => field.envVar)).toEqual(expect.arrayContaining([
+      "QQ_APP_ID",
+      "QQ_CLIENT_SECRET",
+      "QQ_ALLOW_ALL_USERS",
+      "QQ_ALLOWED_USERS",
+      "QQ_GROUP_ALLOWED_USERS",
+      "QQBOT_HOME_CHANNEL",
     ]));
   });
 
@@ -272,6 +290,103 @@ describe("HermesConnectorService helpers", () => {
     expect(baseEnvExists).toBe(false);
   });
 
+  it("syncs Feishu identity and agent mapping fields to env", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    await fs.mkdir(forgeHome, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
+      platforms: {
+        feishu: {
+          enabled: true,
+          values: {
+            appId: "cli_a",
+            domain: "feishu",
+            connectionMode: "websocket",
+            allowAllUsers: false,
+            groupPolicy: "open",
+            botOpenId: "ou_bot",
+            requireMention: true,
+            agentMapping: "agent-a=cli_a,agent-b=cli_b",
+          },
+          secretRefs: { appSecret: "connector.feishu.appSecret" },
+        },
+      },
+    }), "utf8");
+
+    const service = new HermesConnectorService(
+      {
+        baseDir: () => tempDir,
+        hermesDir: () => forgeHome,
+      } as never,
+      {
+        hasSecret: vi.fn(async (ref: string) => ref === "connector.feishu.appSecret"),
+        readSecret: vi.fn(async (ref: string) => ref === "connector.feishu.appSecret" ? "feishu-secret" : undefined),
+      } as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this sync-only test.");
+      },
+    );
+
+    const result = await service.syncEnv();
+    const env = await fs.readFile(result.envPath, "utf8");
+
+    expect(env).toContain("FEISHU_APP_ID=cli_a");
+    expect(env).toContain("FEISHU_APP_SECRET=feishu-secret");
+    expect(env).toContain("FEISHU_DOMAIN=feishu");
+    expect(env).toContain("FEISHU_CONNECTION_MODE=websocket");
+    expect(env).toContain("FEISHU_ALLOW_ALL_USERS=false");
+    expect(env).toContain("FEISHU_GROUP_POLICY=open");
+    expect(env).toContain("FEISHU_BOT_OPEN_ID=ou_bot");
+    expect(env).toContain("FEISHU_REQUIRE_MENTION=true");
+    expect(env).toContain("FEISHU_AGENT_MAPPING=agent-a=cli_a,agent-b=cli_b");
+  });
+
+  it("syncs QQ Bot credentials using Hermes CLI env names", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-qqbot-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    await fs.mkdir(forgeHome, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
+      platforms: {
+        qqbot: {
+          enabled: true,
+          values: {
+            appId: "qq-app",
+            allowAllUsers: false,
+            allowedUsers: "qq-user",
+            groupAllowedUsers: "qq-group-user",
+            homeChannel: "qq-home",
+          },
+          secretRefs: { clientSecret: "connector.qqbot.clientSecret" },
+        },
+      },
+    }), "utf8");
+
+    const service = new HermesConnectorService(
+      {
+        baseDir: () => tempDir,
+        hermesDir: () => forgeHome,
+      } as never,
+      {
+        hasSecret: vi.fn(async (ref: string) => ref === "connector.qqbot.clientSecret"),
+        readSecret: vi.fn(async (ref: string) => ref === "connector.qqbot.clientSecret" ? "qq-secret" : undefined),
+      } as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this sync-only test.");
+      },
+    );
+
+    const result = await service.syncEnv();
+    const env = await fs.readFile(result.envPath, "utf8");
+
+    expect(env).toContain("QQ_APP_ID=qq-app");
+    expect(env).toContain("QQ_CLIENT_SECRET=qq-secret");
+    expect(env).toContain("QQ_ALLOW_ALL_USERS=false");
+    expect(env).toContain("QQ_ALLOWED_USERS=qq-user");
+    expect(env).toContain("QQ_GROUP_ALLOWED_USERS=qq-group-user");
+    expect(env).toContain("QQBOT_HOME_CHANNEL=qq-home");
+    expect(env).not.toContain("QQ_HOME_CHANNEL=qq-home");
+  });
+
   it("ignores stale Weixin QR close events after a refresh starts a new run", () => {
     const service = new HermesConnectorService({} as never, {} as never, async () => "D:\\Hermes Agent");
     const stateful = service as any;
@@ -311,11 +426,15 @@ describe("HermesConnectorService helpers", () => {
 
     expect(connector.configured).toBe(false);
     expect(connector.status).toBe("unconfigured");
-    expect(connector.message).toContain("尚未配置");
+    expect(connector.message).toContain("缺少必填配置：appId、clientSecret");
   });
 
-  it("marks QQ Bot as configured once optional routing values are present", async () => {
-    const service = new HermesConnectorService({} as never, { hasSecret: vi.fn(async () => false) } as never, async () => "D:\\Hermes Agent");
+  it("marks QQ Bot as configured once Hermes CLI credentials are present", async () => {
+    const service = new HermesConnectorService(
+      {} as never,
+      { hasSecret: vi.fn(async (ref: string) => ref === "connector.qqbot.clientSecret") } as never,
+      async () => "D:\\Hermes Agent",
+    );
     const stateful = service as any;
 
     const connector = await stateful.toConnector(
@@ -324,8 +443,8 @@ describe("HermesConnectorService helpers", () => {
         platforms: {
           qqbot: {
             enabled: true,
-            values: { allowedUsers: "alice,bob" },
-            secretRefs: {},
+            values: { appId: "qq-app", allowedUsers: "alice,bob" },
+            secretRefs: { clientSecret: "connector.qqbot.clientSecret" },
           },
         },
       },

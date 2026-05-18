@@ -103,6 +103,55 @@ describe("renderer store task projections", () => {
     expect(projection.status).toBe("complete");
   });
 
+  it("keeps streamed assistant text when the final Windows runner result is the empty-content fallback", () => {
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-streamed-short",
+      userInput: "测试",
+      createdAt: "2026-04-18T10:00:00.000Z",
+    });
+
+    useAppStore.getState().applyTaskEvent({
+      taskRunId: "task-streamed-short",
+      workSessionId: "session-1",
+      engineId: "hermes",
+      event: {
+        type: "lifecycle",
+        stage: "streaming",
+        message: "正在接收 Hermes 流式输出。",
+        at: "2026-04-18T10:00:01.000Z",
+      },
+    });
+
+    useAppStore.getState().applyTaskEvent({
+      taskRunId: "task-streamed-short",
+      workSessionId: "session-1",
+      engineId: "hermes",
+      event: {
+        type: "message_chunk",
+        content: "好的。",
+        at: "2026-04-18T10:00:02.000Z",
+      },
+    });
+
+    useAppStore.getState().applyTaskEvent({
+      taskRunId: "task-streamed-short",
+      workSessionId: "session-1",
+      engineId: "hermes",
+      event: {
+        type: "result",
+        success: true,
+        title: "Hermes 回复",
+        detail: "Hermes 已运行，但没有返回可显示的内容。",
+        at: "2026-04-18T10:00:03.000Z",
+      },
+    });
+
+    const projection = useAppStore.getState().taskRunProjectionsById["task-streamed-short"];
+    expect(projection.assistantMessage.content).toBe("好的。");
+    expect(projection.status).toBe("complete");
+  });
+
   it("keeps only a bounded per-run event history in renderer state", () => {
     useAppStore.getState().beginTaskRun({
       workSessionId: "session-1",

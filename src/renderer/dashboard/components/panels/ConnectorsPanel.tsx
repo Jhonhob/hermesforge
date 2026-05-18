@@ -1135,6 +1135,14 @@ function withConnectorDefaults(platformId: HermesConnectorPlatformId, values: Fo
   if (platformId === "matrix" && !stringValue(next.homeserver)) {
     next.homeserver = "https://matrix.org";
   }
+  if (platformId === "feishu") {
+    if (!stringValue(next.domain)) next.domain = "feishu";
+    if (!stringValue(next.connectionMode)) next.connectionMode = "websocket";
+    if (!stringValue(next.groupPolicy)) next.groupPolicy = "open";
+    if (!stringValue(next.allowBots)) next.allowBots = "none";
+    if (typeof next.allowAllUsers === "undefined") next.allowAllUsers = false;
+    if (typeof next.requireMention === "undefined") next.requireMention = true;
+  }
   if (platformId === "email") {
     const address = stringValue(next.address);
     const detected = detectEmailPreset(address);
@@ -1232,8 +1240,23 @@ function getConnectorEditorConfig(platformId: HermesConnectorPlatformId, values:
       };
     case "feishu":
       return {
-        summary: "飞书先填 App ID 和 App Secret 即可，访问控制可以后补。",
-        advancedFieldKeys: ["allowedUsers", "homeChannel"],
+        summary: "飞书对齐 Hermes CLI：先填 App ID / Secret，默认 WebSocket、私聊配对审批、群聊 @ 机器人触发。",
+        advancedFieldKeys: ["allowAllUsers", "allowedUsers", "groupPolicy", "requireMention", "allowBots", "botOpenId", "botUserId", "botName", "encryptKey", "verificationToken", "agentMapping", "homeChannel"],
+        presets: [
+          {
+            key: "feishu-cn-websocket",
+            label: "飞书 WebSocket",
+            description: "使用飞书中国区和 Hermes CLI 推荐的 WebSocket + 配对审批模式。",
+            apply: (current) => ({ ...current, domain: "feishu", connectionMode: "websocket", allowAllUsers: false, groupPolicy: "open", allowBots: "none", requireMention: true }),
+          },
+          {
+            key: "lark-websocket",
+            label: "Lark WebSocket",
+            description: "使用 Lark 国际区和 Hermes CLI 推荐的 WebSocket + 配对审批模式。",
+            apply: (current) => ({ ...current, domain: "lark", connectionMode: "websocket", allowAllUsers: false, groupPolicy: "open", allowBots: "none", requireMention: true }),
+          },
+        ],
+        tips: ["FEISHU_ALLOW_ALL_USERS=false 时走 Hermes 配对审批", "群聊默认 open，但 requireMention=true，所以仍需 @ 机器人", "Agent 映射会写入 .env 供后续多实例路由使用"],
       };
     case "homeassistant":
       return {
@@ -1284,8 +1307,9 @@ function getConnectorEditorConfig(platformId: HermesConnectorPlatformId, values:
       };
     case "qqbot":
       return {
-        summary: "QQ Bot 先跑通适配器，再按需补充允许用户和群聊限制。",
-        advancedFieldKeys: ["allowedUsers", "groupAllowedUsers", "homeChannel"],
+        summary: "QQ Bot 对齐 Hermes CLI：App ID 和 App Secret 是最小必填，访问控制可后置。",
+        advancedFieldKeys: ["allowAllUsers", "allowedUsers", "groupAllowedUsers", "homeChannel"],
+        tips: ["QQBOT_HOME_CHANNEL 是 Hermes Gateway 当前推荐字段", "留空 allowAllUsers 时默认仍按 Hermes Gateway 授权链路处理"],
       };
     default:
       return {

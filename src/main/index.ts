@@ -324,6 +324,7 @@ app.whenReady().then(async () => {
     runtimeEnvResolver,
     secretVault,
     setupService,
+    preflightService,
     diagnosticsService,
     hermesWebUiService,
     hermesConnectorService,

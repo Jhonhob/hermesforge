@@ -443,9 +443,48 @@ def _safe_preview(value, max_len: int = 500) -> str:
         return str(value)[:max_len]
 
 
+def _text_from_message_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                value = item.get("text") or item.get("content") or item.get("message")
+                if isinstance(value, str):
+                    parts.append(value)
+        return "\n".join(part.strip() for part in parts if part and part.strip())
+    if isinstance(content, dict):
+        value = content.get("text") or content.get("content") or content.get("message")
+        return value if isinstance(value, str) else ""
+    return ""
+
+
 def _extract_final_response(result) -> str:
     if isinstance(result, dict):
-        return str(result.get("final_response") or "")
+        for key in ("final_response", "response", "content", "message", "output", "text"):
+            value = result.get(key)
+            text = _text_from_message_content(value)
+            if text.strip():
+                return text
+        messages = result.get("messages")
+        if isinstance(messages, list):
+            for item in reversed(messages):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("role") not in ("assistant", "agent", None):
+                    continue
+                text = _text_from_message_content(item.get("content") or item.get("message") or item.get("text"))
+                if text.strip():
+                    return text
+        return ""
+    for attr in ("final_response", "response", "content", "message", "output", "text"):
+        value = getattr(result, attr, None)
+        text = _text_from_message_content(value)
+        if text.strip():
+            return text
     return str(result or "")
 
 

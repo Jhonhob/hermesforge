@@ -29,6 +29,11 @@ export class TaskPreflightService {
     private readonly runtimeAdapterFactory?: RuntimeAdapterFactory,
   ) {}
 
+  invalidateCaches() {
+    this.healthCache = undefined;
+    this.runtimePreflightCache = undefined;
+  }
+
   async assertCanStart(input: StartTaskInput, _routeEngine: "hermes", workspaceId: string) {
     const targetPath = input.workspacePath?.trim() || input.sessionFilesPath;
     await this.assertWorkspace(targetPath, this.requiresWorkspace(input));
