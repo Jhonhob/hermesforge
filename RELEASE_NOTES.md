@@ -1,6 +1,6 @@
 # Release Notes
 
-## Hermes Forge v0.2.19
+## Hermes Forge v0.2.20
 
 发布日期：2026-05-18
 
