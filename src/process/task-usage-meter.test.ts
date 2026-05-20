@@ -78,6 +78,18 @@ describe("task usage meter", () => {
       at: new Date().toISOString(),
     }, () => 9999);
     trackTaskUsage(usage, { type: "stdout", line: "this should not inflate actual usage", at: new Date().toISOString() }, () => 9999);
+    trackTaskUsage(usage, {
+      type: "usage",
+      source: "estimated",
+      inputTokens: 9999,
+      outputTokens: 9999,
+      totalTokens: 19998,
+      contextTokens: 19998,
+      contextWindow: 20000,
+      estimatedCostUsd: 999,
+      message: "late estimate",
+      at: new Date().toISOString(),
+    }, () => 9999);
 
     expect(usage.source).toBe("actual");
     expect(usage.inputTokens).toBe(120);

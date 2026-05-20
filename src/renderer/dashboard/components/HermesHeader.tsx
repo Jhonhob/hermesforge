@@ -17,6 +17,7 @@ export function HermesHeader(props: {
   onOpenSessionFolder: () => void;
   onOpenSupport: () => void;
   inspectorOpen?: boolean;
+  workspaceDrawerOpen?: boolean;
   agentPanelOpen?: boolean;
 }) {
   const store = useAppStore();
@@ -306,6 +307,16 @@ export function HermesHeader(props: {
               {updatePercent}
             </span>
           ) : null}
+        </button>
+
+        <button
+          className={headerActionClass(props.workspaceDrawerOpen)}
+          onClick={props.onToggleWorkspace}
+          title={props.workspaceDrawerOpen ? "收起工作区文件" : "打开工作区文件"}
+          aria-label="工作区文件"
+          type="button"
+        >
+          <FolderOpen size={15} />
         </button>
 
         <button

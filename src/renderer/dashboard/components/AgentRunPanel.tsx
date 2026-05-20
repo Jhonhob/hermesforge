@@ -193,7 +193,10 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
               <div className="grid grid-cols-3 gap-2 text-[12px]">
                 <TokenMetric label={usage.source === "actual" ? "实测输入" : "估算输入"} value={formatExactNumber(usage.totalInput)} />
                 <TokenMetric label={usage.source === "actual" ? "实测输出" : "估算输出"} value={formatExactNumber(usage.totalOutput)} />
-                <TokenMetric label={usage.latestContextTokens ? "实测上下文" : "估算费用"} value={usage.latestContextTokens ? formatExactNumber(usage.latestContextTokens) : formatCost(usage.totalCost)} />
+                <TokenMetric
+                  label={typeof usage.latestContextTokens === "number" ? (usage.source === "actual" ? "实测上下文" : "估算上下文") : "估算费用"}
+                  value={typeof usage.latestContextTokens === "number" ? formatExactNumber(usage.latestContextTokens) : formatCost(usage.totalCost)}
+                />
               </div>
               <div className="mt-3 flex items-center justify-between text-[12px]">
                 <span className="text-slate-500">本轮占用</span>
@@ -359,10 +362,7 @@ function summarizeUsage(events: TaskEventEnvelope[], contextWindow?: number) {
   const totalOutput = latestEvents.reduce((sum, event) => sum + event.outputTokens, 0);
   const totalTokens = latestEvents.reduce((sum, event) => sum + usageTotalTokens(event), 0);
   const totalCost = latestEvents.reduce((sum, event) => sum + event.estimatedCostUsd, 0);
-  const latest = latestEvents.sort((left, right) => {
-    if ((left.source === "actual") !== (right.source === "actual")) return left.source === "actual" ? -1 : 1;
-    return right.at.localeCompare(left.at);
-  })[0];
+  const latest = latestEvents.sort((left, right) => right.at.localeCompare(left.at))[0];
   const latestContextTokens = latest?.contextTokens;
   const latestTotal = latest ? (latestContextTokens ?? usageTotalTokens(latest)) : 0;
   const effectiveContextWindow = latest?.contextWindow ?? contextWindow;

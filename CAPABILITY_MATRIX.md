@@ -13,8 +13,8 @@
 | Native fast path | 已接审批 | 桌面侧宿主管理写文件会触发审批。 |
 | 首启/诊断 | 配置中心可恢复 | Hermes 路径、模型、Secret、健康检查统一在 UI 内处理。 |
 | 模型配置 | 已支持定价与上下文窗口 | 连接测试与 provider/profile 保持兼容。 |
-| 连接器配置 | 主进程存储 | 配置状态与运行状态分离展示。 |
-| Gateway runtime | 已有健康/退避/退出记录 | 包含 `healthStatus`、`lastExitCode`、`restartCount`、`backoffUntil`。 |
+| 连接器配置 | 主进程存储 | 配置状态与运行状态分离展示；飞书支持多 Bot 实例与独立 Agent profile。 |
+| Gateway runtime | 已有健康/退避/退出记录 | 包含 `healthStatus`、`lastExitCode`、`restartCount`、`backoffUntil`，并区分主 Gateway 与 `feishu:*` 实例状态。 |
 | 微信扫码 | 已闭环到 timeout/retry | 主进程状态机覆盖 `idle -> success|timeout|failed|cancelled`。 |
 | Renderer 审批卡 | 已联通 | `approval` 事件驱动卡片创建与关闭。 |
 | Renderer 连接器面板 | 已联通 runtime 状态 | UI 区分配置状态、运行状态、二维码超时态。 |
@@ -31,5 +31,5 @@
 ## 下一阶段优先级
 
 1. 继续补首启诊断文案与失败恢复体验。
-2. 深化连接器 runtime 的非微信适配器闭环。
+2. 深化飞书 / QQ Bot runtime 的多实例健康检查、启动恢复与诊断闭环。
 3. 追加 Electron smoke 测试与 CI 门槛。

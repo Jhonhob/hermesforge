@@ -56,6 +56,7 @@ export function trackTaskUsage(usage: TaskUsageState | undefined, event: EngineE
     return;
   }
   if (event.type === "usage" && event.source !== "actual") {
+    if (usage.source === "actual") return;
     usage.inputTokens = Math.max(usage.inputTokens, event.inputTokens);
     usage.outputTokens = Math.max(usage.outputTokens, event.outputTokens);
     usage.totalTokens = event.totalTokens ?? usage.totalTokens;

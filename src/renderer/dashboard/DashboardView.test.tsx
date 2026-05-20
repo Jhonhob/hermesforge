@@ -227,6 +227,24 @@ describe("DashboardView", () => {
     expect(agentShell).toHaveStyle({ width: "360px" });
   });
 
+  it("opens and closes workspace files from the user-visible controls", () => {
+    renderView();
+
+    expect(useAppStore.getState().workspaceDrawerOpen).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区文件" }));
+    expect(useAppStore.getState().workspaceDrawerOpen).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "收起工作区文件" }));
+    expect(useAppStore.getState().workspaceDrawerOpen).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "打开工作区文件" }));
+    expect(useAppStore.getState().workspaceDrawerOpen).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useAppStore.getState().workspaceDrawerOpen).toBe(false);
+  });
+
   it("renders long chats through a recent window and loads older runs on demand", () => {
     const projections = Object.fromEntries(
       Array.from({ length: 90 }, (_, index) => {

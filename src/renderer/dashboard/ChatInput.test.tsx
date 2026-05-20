@@ -116,4 +116,49 @@ describe("ChatInput", () => {
     expect(meter).toHaveAttribute("aria-label", expect.stringContaining("701 tokens"));
     expect(meter).toHaveAttribute("aria-label", expect.stringContaining("剩余：299 tokens"));
   });
+
+  it("does not label a newer estimated run as actual because an older run had actual usage", () => {
+    useAppStore.setState({
+      taskEventsByRunId: {
+        "task-1": [{
+          taskRunId: "task-1",
+          workSessionId: "session-1",
+          sessionId: "task-1",
+          engineId: "hermes",
+          event: {
+            type: "usage",
+            inputTokens: 600,
+            outputTokens: 100,
+            totalTokens: 700,
+            estimatedCostUsd: 0,
+            source: "actual",
+            message: "actual",
+            at: "2026-05-18T10:00:00.000Z",
+          },
+        }],
+        "task-2": [{
+          taskRunId: "task-2",
+          workSessionId: "session-1",
+          sessionId: "task-2",
+          engineId: "hermes",
+          event: {
+            type: "usage",
+            inputTokens: 40,
+            outputTokens: 10,
+            totalTokens: 50,
+            estimatedCostUsd: 0,
+            source: "estimated",
+            message: "estimate",
+            at: "2026-05-18T10:01:00.000Z",
+          },
+        }],
+      },
+      userInput: "abcd",
+    });
+
+    renderInput();
+
+    expect(screen.getByLabelText(/估算当前上下文占用/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/实测当前上下文占用/)).toBeNull();
+  });
 });

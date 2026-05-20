@@ -136,6 +136,42 @@ describe("HermesConnectorService helpers", () => {
     }), () => false)).toBeUndefined();
   });
 
+  it("does not treat a Feishu-only Gateway runtime as the main connector Gateway", () => {
+    expect(testOnly.hasMainGatewayRuntime(
+      { running: true, healthStatus: "running", platformStates: { "feishu:alpha": "connected" }, checkedAt: "2026-05-20T01:00:00.000Z", message: "" },
+      { managedMainRunning: false, managedFeishuCount: 0 },
+    )).toBe(false);
+    expect(testOnly.hasMainGatewayRuntime(
+      { running: true, healthStatus: "running", platformStates: { weixin: "connected", "feishu:alpha": "connected" }, checkedAt: "2026-05-20T01:00:00.000Z", message: "" },
+      { managedMainRunning: false, managedFeishuCount: 0 },
+    )).toBe(true);
+    expect(testOnly.hasMainGatewayRuntime(
+      { running: true, healthStatus: "running", checkedAt: "2026-05-20T01:00:00.000Z", message: "" },
+      { managedMainRunning: false, managedFeishuCount: 1 },
+    )).toBe(false);
+    expect(testOnly.hasMainGatewayRuntime(
+      { running: true, healthStatus: "running", checkedAt: "2026-05-20T01:00:00.000Z", message: "" },
+      { managedMainRunning: false, managedFeishuCount: 0 },
+    )).toBe(true);
+  });
+
+  it("treats legacy unprefixed Feishu state as the default instance runtime", () => {
+    expect(testOnly.connectorRuntimeStatus(
+      "feishu:default",
+      true,
+      true,
+      {
+        running: true,
+        managedRunning: false,
+        healthStatus: "running",
+        platformStates: { feishu: "connected" },
+        connectedPlatforms: ["feishu"],
+        checkedAt: "2026-05-20T01:00:00.000Z",
+        message: "",
+      },
+    )).toBe("running");
+  });
+
   it("ignores stale pidless gateway state snapshots", () => {
     expect(testOnly.parseGatewayStateSnapshot(JSON.stringify({
       gateway_state: "running",
@@ -363,6 +399,10 @@ describe("HermesConnectorService helpers", () => {
     const forgeHome = path.join(tempDir, "hermes-home");
     await fs.mkdir(forgeHome, { recursive: true });
     await fs.mkdir(path.join(forgeHome, "profiles", "agent-alpha"), { recursive: true });
+    const staleDefaultHome = path.join(forgeHome, "connector-instances", "feishu", "stale-default");
+    const staleProfileHome = path.join(forgeHome, "profiles", "agent-old", "connector-instances", "feishu", "stale-profile");
+    await fs.mkdir(staleDefaultHome, { recursive: true });
+    await fs.mkdir(staleProfileHome, { recursive: true });
     await fs.writeFile(path.join(forgeHome, "profiles", "agent-alpha", "config.yaml"), "model:\n  default: alpha-model\n", "utf8");
     await fs.writeFile(path.join(forgeHome, "profiles", "agent-alpha", "auth.json"), "{\"token\":\"alpha\"}", "utf8");
     await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
@@ -418,6 +458,64 @@ describe("HermesConnectorService helpers", () => {
     await expect(fs.lstat(path.join(alphaHome, "config.yaml"))).resolves.toBeTruthy();
     await expect(fs.lstat(path.join(alphaHome, "auth.json"))).resolves.toBeTruthy();
     await expect(fs.lstat(path.join(betaHome, "skills"))).resolves.toBeTruthy();
+    await expect(fs.stat(staleDefaultHome)).rejects.toThrow();
+    await expect(fs.stat(staleProfileHome)).rejects.toThrow();
+  });
+
+  it("imports legacy Feishu env into the default instance without dropping existing bot instances", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-import-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    const secrets = new Map<string, string>([["connector.feishu.alpha.appSecret", "secret-alpha"]]);
+    await fs.mkdir(forgeHome, { recursive: true });
+    await fs.writeFile(path.join(tempDir, "connectors-config.json"), JSON.stringify({
+      platforms: {
+        feishu: {
+          enabled: true,
+          instances: {
+            alpha: {
+              enabled: true,
+              values: { appId: "cli_alpha", domain: "feishu", connectionMode: "websocket", agentId: "agent-alpha" },
+              secretRefs: { appSecret: "connector.feishu.alpha.appSecret" },
+            },
+          },
+        },
+      },
+    }), "utf8");
+
+    const service = new HermesConnectorService(
+      { baseDir: () => tempDir, hermesDir: () => forgeHome } as never,
+      {
+        hasSecret: vi.fn(async (ref: string) => secrets.has(ref)),
+        readSecret: vi.fn(async (ref: string) => secrets.get(ref)),
+        saveSecret: vi.fn(async (ref: string, value: string) => {
+          secrets.set(ref, value);
+        }),
+      } as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this sync-only test.");
+      },
+    );
+
+    const imported = await service.importFromEnvValues({
+      FEISHU_APP_ID: "cli_default",
+      FEISHU_APP_SECRET: "secret-default",
+      FEISHU_DOMAIN: "feishu",
+      FEISHU_CONNECTION_MODE: "websocket",
+    });
+    const result = await service.syncEnv();
+    const defaultEnv = await fs.readFile(path.join(forgeHome, "connector-instances", "feishu", "default", ".env"), "utf8");
+    const alphaEnv = await fs.readFile(path.join(forgeHome, "profiles", "agent-alpha", "connector-instances", "feishu", "alpha", ".env"), "utf8");
+    const mainEnv = await fs.readFile(result.envPath, "utf8");
+
+    expect(imported.importedPlatforms).toContain("feishu");
+    expect(imported.importedSecretRefs).toContain("connector.feishu.default.appSecret");
+    expect(mainEnv).not.toContain("FEISHU_APP_ID=");
+    expect(defaultEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:default");
+    expect(defaultEnv).toContain("FEISHU_APP_ID=cli_default");
+    expect(defaultEnv).toContain("FEISHU_APP_SECRET=secret-default");
+    expect(alphaEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_ID=cli_alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_SECRET=secret-alpha");
   });
 
   it("reads Feishu runtime state from the bound Agent profile instance home", async () => {

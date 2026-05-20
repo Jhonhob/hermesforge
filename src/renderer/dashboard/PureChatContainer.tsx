@@ -24,6 +24,7 @@ export function PureChatContainer(props: {
   onRestoreSnapshot: () => void;
   onOpenFix?: (target: FixTarget) => void;
   onUsePromptSuggestion?: (prompt: string) => void;
+  onOpenWorkspaceDrawer?: () => void;
   canStart: boolean;
   sendBlockReason?: string;
   sendBlockTarget?: FixTarget;
@@ -107,6 +108,7 @@ export function PureChatContainer(props: {
             <EmptyPureChat
               hasWorkspace={Boolean(workspacePath)}
               onUsePromptSuggestion={props.onUsePromptSuggestion}
+              onOpenWorkspaceDrawer={props.onOpenWorkspaceDrawer}
               onPickWorkspace={props.onPickWorkspace}
             />
           ) : (
@@ -252,10 +254,10 @@ function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string;
   return (
     <article
       className={cn(
-        "hermes-message-card group relative w-full rounded-[24px] px-5 py-4 shadow-[0_16px_38px_rgba(15,23,42,0.05)] outline-none transition",
+        "hermes-message-card group relative min-w-0 overflow-hidden rounded-[24px] px-5 py-4 shadow-[0_16px_38px_rgba(15,23,42,0.05)] outline-none transition",
         isUser
           ? "hermes-message-card--user ml-auto max-w-[min(64%,560px)] border border-blue-100 bg-[#eef5ff] text-slate-800 max-sm:max-w-[92%]"
-          : "hermes-message-card--assistant max-w-3xl border border-[var(--hermes-card-border)] bg-white text-slate-800",
+          : "hermes-message-card--assistant w-full max-w-3xl border border-[var(--hermes-card-border)] bg-white text-slate-800",
       )}
       tabIndex={0}
     >
@@ -356,9 +358,9 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
           {waiting ? (
             <TypingState phase={run.status === "routing" ? "handoff" : "replying"} thoughtStatus={thoughtStatus} startedAt={run.startedAt} />
           ) : (
-            <div className="hermes-assistant-bubble relative rounded-[22px] border border-[var(--hermes-primary-border)] bg-[var(--hermes-primary-soft)] p-4 before:absolute before:left-0 before:top-5 before:h-10 before:w-1 before:rounded-r-full before:bg-[var(--hermes-primary)]">
+            <div className="hermes-assistant-bubble relative min-w-0 overflow-hidden rounded-[22px] border border-[var(--hermes-primary-border)] bg-[var(--hermes-primary-soft)] p-4 before:absolute before:left-0 before:top-5 before:h-10 before:w-1 before:rounded-r-full before:bg-[var(--hermes-primary)]">
               {thoughtStatus.visible && thoughtStatus.phase !== "replying" ? <ThoughtStatusStrip status={thoughtStatus} /> : null}
-              <StreamingMarkdown content={run.assistantMessage.content} isStreaming={run.status === "streaming"} className="hermes-markdown max-w-none break-words text-[14px] leading-relaxed text-slate-800 [overflow-wrap:anywhere]" />
+              <StreamingMarkdown content={run.assistantMessage.content} isStreaming={run.status === "streaming"} className="hermes-markdown min-w-0 max-w-full break-words text-[14px] leading-relaxed text-slate-800 [overflow-wrap:anywhere]" />
               {completed && run.assistantMessage.content.length > LONG_REPLY_FILE_THRESHOLD ? <LongReplyExportHint run={run} /> : null}
               {softStreaming ? <SoftStreamingHint /> : null}
             </div>
@@ -671,7 +673,7 @@ function ToolSummary(props: { tools: ToolEvent[] }) {
   );
 }
 
-function EmptyPureChat(props: { hasWorkspace: boolean; onPickWorkspace: () => void; onUsePromptSuggestion?: (prompt: string) => void }) {
+function EmptyPureChat(props: { hasWorkspace: boolean; onPickWorkspace: () => void; onUsePromptSuggestion?: (prompt: string) => void; onOpenWorkspaceDrawer?: () => void }) {
   const suggestions = props.hasWorkspace
     ? [
         "分析这个项目结构，并告诉我入口文件和关键模块。",
@@ -708,6 +710,11 @@ function EmptyPureChat(props: { hasWorkspace: boolean; onPickWorkspace: () => vo
         {!props.hasWorkspace ? (
           <button className="mt-5 rounded-full bg-slate-900 px-4 py-2 text-[13px] font-semibold text-white hover:bg-slate-800" onClick={props.onPickWorkspace} type="button">
             选择工作区
+          </button>
+        ) : null}
+        {props.hasWorkspace ? (
+          <button className="mt-5 rounded-full border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:border-slate-300 hover:bg-slate-50" onClick={props.onOpenWorkspaceDrawer} type="button">
+            打开工作区文件
           </button>
         ) : null}
       </div>

@@ -176,6 +176,24 @@ describe("AgentRunPanel", () => {
     expect(screen.queryByText("实测 22K")).toBeNull();
   });
 
+  it("does not label a newer session estimate as actual because an older task has actual usage", () => {
+    useAppStore.setState({
+      events: [
+        { taskRunId: "task-1", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9000, outputTokens: 1000, totalTokens: 10000, contextTokens: 10000, contextWindow: 128000, estimatedCostUsd: 0.02, message: "old actual", at: "2026-04-22T10:00:00.000Z" } },
+        { taskRunId: "task-2", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "estimated", inputTokens: 40, outputTokens: 15, totalTokens: 55, contextTokens: 55, contextWindow: 128000, estimatedCostUsd: 0, message: "new estimate", at: "2026-04-22T10:01:00.000Z" } },
+      ],
+      taskRunOrderBySession: { "session-1": ["task-1", "task-2"] },
+    });
+
+    render(<AgentRunPanel open />);
+
+    expect(screen.getByText("约 55")).toBeInTheDocument();
+    expect(screen.getByText("估算上下文")).toBeInTheDocument();
+    expect(screen.getByText("最近一次估算：40 in / 15 out")).toBeInTheDocument();
+    expect(screen.queryByText("实测 10K")).toBeNull();
+    expect(screen.queryByText("实测上下文")).toBeNull();
+  });
+
   it("uses latest usage per task run instead of double-counting cumulative events", () => {
     useAppStore.setState({
       events: [

@@ -271,6 +271,10 @@ function normalizeStatus(status: unknown): TaskRunStatus {
   return "complete";
 }
 
+function isTerminalTaskRunStatus(status: TaskRunStatus) {
+  return status === "complete" || status === "failed" || status === "cancelled" || status === "interrupted";
+}
+
 function ensureTaskProjection(
   projection: TaskRunProjection | undefined,
   fallback: { taskRunId: string; workSessionId: string; createdAt?: string },
@@ -472,6 +476,7 @@ export const taskSlice = combine<TaskState, TaskActions>(
           actualEngine: event.engineId,
         };
         const currentOrder = state.taskRunOrderBySession[workSessionId] ?? [];
+        const isTerminal = isTerminalTaskRunStatus(nextProjection.status);
         return {
           events: newEvents,
           taskEventsByRunId: {
@@ -486,6 +491,8 @@ export const taskSlice = combine<TaskState, TaskActions>(
             ...state.taskRunOrderBySession,
             [workSessionId]: currentOrder.includes(event.taskRunId) ? currentOrder : [...currentOrder, event.taskRunId],
           },
+          ...(isTerminal && state.runningTaskRunId === event.taskRunId ? { runningTaskRunId: undefined } : {}),
+          ...(isTerminal && state.runningSessionId === event.taskRunId ? { runningSessionId: undefined } : {}),
         };
       }),
     applyStreamEvent: (event: StreamEvent) =>

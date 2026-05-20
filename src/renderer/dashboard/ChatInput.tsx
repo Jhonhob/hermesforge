@@ -924,9 +924,10 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
   const remainingLabel = typeof meter.remainingTokens === "number"
     ? `${formatExactTokenCount(Math.max(0, meter.remainingTokens))} tokens`
     : "未知";
+  const measuredAtLabel = meter.measuredAt ? `；${meter.source === "actual" ? "实测时间" : "估算时间"} ${meter.measuredAt}` : "";
   const title = meter.contextWindow
-    ? `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens；剩余：${remainingLabel}；模型窗口上限：${contextWindowLabel}${percentLabel ? `；占用 ${percentLabel}` : ""}${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`
-    : `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${meter.measuredAt ? `；实测时间 ${meter.measuredAt}` : ""}`;
+    ? `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens；剩余：${remainingLabel}；模型窗口上限：${contextWindowLabel}${percentLabel ? `；占用 ${percentLabel}` : ""}${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${measuredAtLabel}`
+    : `${sourceLabel}当前上下文占用：${displayTokenLabel} tokens${meter.inputTokens ? `；最近输入 ${meter.inputTokens.toLocaleString()} tokens` : ""}${meter.outputTokens ? `；最近输出 ${meter.outputTokens.toLocaleString()} tokens` : ""}${meter.draftTokens ? `；当前草稿约增加 ${meter.draftTokens.toLocaleString()} tokens` : ""}${meter.attachmentCount ? "；附件正文会在发送时另行计入" : ""}${measuredAtLabel}`;
   const meterClass = meter.tone === "rose"
     ? "border-rose-200/80 bg-rose-50/80 text-rose-700 shadow-rose-100/80"
     : meter.tone === "amber"
@@ -1000,7 +1001,7 @@ function ContextMeterPill(props: { meter: ContextMeter }) {
           <div className="mt-3 space-y-1.5">
             <ContextDetailRow label="当前占用" value={`${displayTokenLabel} tokens`} />
             <ContextDetailRow label="剩余窗口" value={remainingLabel} />
-            {typeof meter.contextTokens === "number" ? <ContextDetailRow label="实测 Prompt" value={`${meter.contextTokens.toLocaleString()} tokens`} /> : null}
+            {typeof meter.contextTokens === "number" ? <ContextDetailRow label={meter.source === "actual" ? "实测 Prompt" : "估算 Prompt"} value={`${meter.contextTokens.toLocaleString()} tokens`} /> : null}
             {typeof meter.inputTokens === "number" ? <ContextDetailRow label="最近输入" value={`${meter.inputTokens.toLocaleString()} tokens`} /> : null}
             {typeof meter.outputTokens === "number" ? <ContextDetailRow label="最近输出" value={`${meter.outputTokens.toLocaleString()} tokens`} /> : null}
             <ContextDetailRow label="当前草稿" value={`约 +${meter.draftTokens.toLocaleString()} tokens`} />
@@ -1198,12 +1199,12 @@ function buildContextMeter(input: {
   const attachmentOverhead = input.attachmentCount * 48;
   const draftTokens = Math.max(0, estimateTokens(input.userInput) + attachmentOverhead);
   const fallbackTokens = Math.max(0, estimateTokens(`${historyText}\n${input.userInput}`) + attachmentOverhead);
-  const actualBaseTokens = latestUsage
+  const usageBaseTokens = latestUsage
     ? Math.max(latestUsage.contextTokens ?? 0, latestUsage.totalTokens ?? 0, latestUsage.inputTokens + latestUsage.outputTokens)
     : undefined;
   const effectiveContextWindow = latestUsage?.contextWindow ?? input.contextWindow;
-  const usedTokens = actualBaseTokens !== undefined
-    ? Math.max(0, actualBaseTokens + draftTokens)
+  const usedTokens = usageBaseTokens !== undefined
+    ? Math.max(0, usageBaseTokens + draftTokens)
     : fallbackTokens;
   const source = latestUsage?.source ?? "estimated";
   const remainingTokens = effectiveContextWindow && effectiveContextWindow > 0
@@ -1232,7 +1233,7 @@ function buildContextMeter(input: {
     source,
     inputTokens: latestUsage?.inputTokens,
     outputTokens: latestUsage?.outputTokens,
-    baseTokens: actualBaseTokens,
+    baseTokens: usageBaseTokens,
     contextTokens: latestUsage?.contextTokens,
     measuredAt: latestUsage?.at,
   };
@@ -1258,10 +1259,16 @@ function latestUsageForSession(
 ): { inputTokens: number; outputTokens: number; totalTokens?: number; contextTokens?: number; contextWindow?: number; source: "actual" | "estimated"; at?: string } | undefined {
   const usageEvents = Object.values(eventsByRunId)
     .flat()
-    .filter((event) => (!activeSessionId || event.workSessionId === activeSessionId) && event.event.type === "usage")
-    .map((event) => event.event as Extract<EngineEvent, { type: "usage" }>);
-  const actualEvents = usageEvents.filter((event) => event.source === "actual");
-  const preferred = latestByTimestamp(actualEvents.length ? actualEvents : usageEvents);
+    .filter((event) => (!activeSessionId || event.workSessionId === activeSessionId) && event.event.type === "usage");
+  const latestByRun = new Map<string, Extract<EngineEvent, { type: "usage" }>>();
+  for (const envelope of usageEvents) {
+    const usage = envelope.event as Extract<EngineEvent, { type: "usage" }>;
+    const existing = latestByRun.get(envelope.taskRunId);
+    if (!existing || prefersUsageEvent(usage, existing)) {
+      latestByRun.set(envelope.taskRunId, usage);
+    }
+  }
+  const preferred = latestByTimestamp([...latestByRun.values()]);
   if (preferred) {
     return {
       inputTokens: preferred.inputTokens,
@@ -1286,6 +1293,11 @@ function latestUsageForSession(
 
 function latestByTimestamp<T extends { at: string }>(events: T[]) {
   return events.reduce<T | undefined>((latest, event) => (!latest || event.at >= latest.at ? event : latest), undefined);
+}
+
+function prefersUsageEvent(next: Extract<EngineEvent, { type: "usage" }>, current: Extract<EngineEvent, { type: "usage" }>) {
+  if ((next.source === "actual") !== (current.source === "actual")) return next.source === "actual";
+  return next.at >= current.at;
 }
 
 function contextTextFromProjections(

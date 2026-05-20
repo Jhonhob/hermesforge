@@ -1333,6 +1333,7 @@ function App() {
     store.rememberWorkspace(workspacePath);
     store.clearSelectedFiles();
     store.clearAttachments();
+    store.setWorkspaceDrawerOpen(false);
     writeRecentWorkspaces(useAppStore.getState().recentWorkspaces);
     if (current.activeSessionId) {
       const session = await window.workbenchClient.updateSession({ id: current.activeSessionId, workspacePath, workspaceStatus: "ready" });

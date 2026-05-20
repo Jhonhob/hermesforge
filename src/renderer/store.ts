@@ -146,7 +146,6 @@ function sanitizePersistedState(value: unknown) {
       Array.isArray(order) ? order.filter((taskRunId): taskRunId is string => typeof taskRunId === "string" && Boolean(normalizedProjections[taskRunId])) : [],
     ]),
   );
-
   return {
     ...value,
     taskType: value.taskType === "chat" ? "custom" : value.taskType,
@@ -154,6 +153,8 @@ function sanitizePersistedState(value: unknown) {
     agentPanelWidth: sanitizePanelWidth(value.agentPanelWidth, 360, 320, 520),
     taskRunProjectionsById: normalizedProjections,
     taskRunOrderBySession: normalizedOrder,
+    runningTaskRunId: undefined,
+    runningSessionId: undefined,
   };
 }
 
@@ -202,8 +203,8 @@ const useAppStoreBase = create<AppStore>()(
         workspaceDrawerOpen: false,
         agentPanelOpen: false,
         activePanel: "chat",
-        runningTaskRunId: state.runningTaskRunId,
-        runningSessionId: state.runningSessionId,
+        runningTaskRunId: undefined,
+        runningSessionId: undefined,
         events: [],
         taskEventsByRunId: {},
         streamEventsByTaskId: {},

@@ -8,6 +8,12 @@ const getWeixinQrLoginStatus = vi.fn<() => Promise<WeixinQrLoginStatus>>();
 const startWeixinQrLogin = vi.fn<() => Promise<{ ok: boolean; status: WeixinQrLoginStatus; message: string }>>();
 const cancelWeixinQrLogin = vi.fn<() => Promise<{ ok: boolean; status: WeixinQrLoginStatus; message: string }>>();
 const installWeixinDependency = vi.fn<() => Promise<{ ok: boolean; message: string; command: string; stdout: string; stderr: string; status?: WeixinQrLoginStatus }>>();
+const syncConnectorsEnv = vi.fn();
+const saveConnector = vi.fn();
+const disableConnector = vi.fn();
+const startGateway = vi.fn();
+const stopGateway = vi.fn();
+const restartGateway = vi.fn();
 const scrollIntoView = vi.fn();
 
 beforeEach(() => {
@@ -16,6 +22,12 @@ beforeEach(() => {
   startWeixinQrLogin.mockReset();
   cancelWeixinQrLogin.mockReset();
   installWeixinDependency.mockReset();
+  syncConnectorsEnv.mockReset();
+  saveConnector.mockReset();
+  disableConnector.mockReset();
+  startGateway.mockReset();
+  stopGateway.mockReset();
+  restartGateway.mockReset();
   scrollIntoView.mockReset();
   Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
     configurable: true,
@@ -28,12 +40,12 @@ beforeEach(() => {
       startWeixinQrLogin,
       cancelWeixinQrLogin,
       installWeixinDependency,
-      syncConnectorsEnv: vi.fn(),
-      saveConnector: vi.fn(),
-      disableConnector: vi.fn(),
-      startGateway: vi.fn(),
-      stopGateway: vi.fn(),
-      restartGateway: vi.fn(),
+      syncConnectorsEnv,
+      saveConnector,
+      disableConnector,
+      startGateway,
+      stopGateway,
+      restartGateway,
     },
   });
 });
@@ -158,6 +170,94 @@ describe("ConnectorsPanel", () => {
     expect(screen.getByText("异常")).toBeInTheDocument();
   });
 
+  it("lets a stopped Feishu instance start even when another Gateway is already running", async () => {
+    const runningAlphaStoppedBeta = buildListResult({
+      connectors: [
+        buildConnector({
+          platformId: "feishu",
+          label: "Feishu",
+          status: "configured",
+          runtimeStatus: "stopped",
+          configured: true,
+          message: "已配置，等待同步或启动 Gateway。",
+          instanceId: "beta",
+          agentId: "agent-beta",
+        }),
+      ],
+      gateway: {
+        running: true,
+        managedRunning: true,
+        healthStatus: "running",
+        platformStates: { "feishu:alpha": "connected" },
+        connectedPlatforms: ["feishu:alpha"],
+        message: "Gateway 正由桌面端托管运行。",
+        checkedAt: "2026-05-20T01:00:00.000Z",
+      },
+    });
+    listConnectors.mockResolvedValue(runningAlphaStoppedBeta);
+    startGateway.mockResolvedValue({
+      ok: true,
+      message: "Gateway 已启动。",
+      status: runningAlphaStoppedBeta.gateway,
+    });
+
+    render(<ConnectorsPanel />);
+
+    expect(await screen.findByText("Feishu")).toBeInTheDocument();
+    expect(screen.getByText("Feishu:beta")).toBeInTheDocument();
+    expect(screen.getByText("Agent:agent-beta")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "启动 Gateway" }));
+    expect(await screen.findByText("Gateway 已启动。")).toBeInTheDocument();
+    expect(startGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps saved Feishu advanced fields visible when editing", async () => {
+    listConnectors.mockResolvedValue(buildListResult({
+      connectors: [
+        buildConnector({
+          platformId: "feishu",
+          label: "Feishu",
+          status: "configured",
+          runtimeStatus: "running",
+          configured: true,
+          message: "已配置，Gateway 正在运行。",
+          instanceId: "alpha",
+          agentId: "agent-alpha",
+          fields: [
+            { key: "appId", envVar: "FEISHU_APP_ID", label: "App ID", type: "text", required: true },
+            { key: "appSecret", envVar: "FEISHU_APP_SECRET", label: "App Secret", type: "password", required: true, secret: true },
+            { key: "domain", envVar: "FEISHU_DOMAIN", label: "Domain", type: "text" },
+            { key: "connectionMode", envVar: "FEISHU_CONNECTION_MODE", label: "连接模式", type: "text" },
+            { key: "agentId", envVar: "HERMES_AGENT_ID", label: "绑定 Agent", type: "text" },
+            { key: "allowBots", envVar: "FEISHU_ALLOW_BOTS", label: "允许机器人消息", type: "text" },
+            { key: "botOpenId", envVar: "FEISHU_BOT_OPEN_ID", label: "Bot Open ID", type: "text" },
+            { key: "encryptKey", envVar: "FEISHU_ENCRYPT_KEY", label: "Webhook Encrypt Key", type: "password", secret: true },
+          ],
+          values: {
+            appId: "cli_saved",
+            domain: "feishu",
+            connectionMode: "websocket",
+            agentId: "agent-alpha",
+            allowBots: "mentions",
+            botOpenId: "ou_saved",
+          },
+          secretStatus: { appSecret: true, encryptKey: true },
+        }),
+      ],
+    }));
+
+    render(<ConnectorsPanel />);
+
+    expect(await screen.findByText("Feishu")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑" })[1]);
+
+    expect(screen.getByDisplayValue("cli_saved")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("agent-alpha")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("mentions")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("ou_saved")).toBeInTheDocument();
+    expect(screen.getAllByText("已保存密钥，留空保存不会覆盖。")).toHaveLength(2);
+  });
+
   it("shows timeout state in the Weixin QR wizard", async () => {
     listConnectors.mockResolvedValue(buildListResult({
       connectors: [
@@ -257,13 +357,18 @@ function buildListResult(overrides: Partial<HermesConnectorListResult> = {}): He
 }
 
 function buildConnector(overrides: {
-  platformId: "weixin" | "telegram" | "email";
+  platformId: "weixin" | "telegram" | "email" | "feishu" | "qqbot";
   label: string;
   status: "unconfigured" | "configured" | "running" | "error" | "disabled";
   runtimeStatus: "stopped" | "running" | "error";
   configured: boolean;
   message: string;
   fields?: HermesConnectorField[];
+  instanceId?: string;
+  agentId?: string;
+  values?: Record<string, string | boolean>;
+  secretRefs?: Record<string, string>;
+  secretStatus?: Record<string, boolean>;
 }) {
   return {
     platform: {
@@ -274,14 +379,17 @@ function buildConnector(overrides: {
       fields: overrides.fields ?? [],
       setupHelp: [],
     },
+    instanceId: overrides.instanceId,
+    agentId: overrides.agentId,
+    instanceLabel: overrides.instanceId ? overrides.label : undefined,
     status: overrides.status,
     runtimeStatus: overrides.runtimeStatus,
     enabled: true,
     configured: overrides.configured,
     missingRequired: [],
-    values: {},
-    secretRefs: {},
-    secretStatus: {},
+    values: overrides.values ?? {},
+    secretRefs: overrides.secretRefs ?? {},
+    secretStatus: overrides.secretStatus ?? {},
     message: overrides.message,
   };
 }

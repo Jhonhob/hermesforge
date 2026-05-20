@@ -377,6 +377,15 @@
     margin: 0;
   }
 
+  .hermes-markdown,
+  .hermes-markdown :where(p, ul, ol, li, blockquote, pre, table) {
+    max-width: 100%;
+  }
+
+  .hermes-markdown :where(a, code) {
+    overflow-wrap: anywhere;
+  }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;

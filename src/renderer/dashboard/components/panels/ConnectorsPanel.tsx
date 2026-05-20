@@ -134,6 +134,7 @@ export function ConnectorsPanel() {
       if (showAdvancedEditor) return true;
       if (!editorConfig) return true;
       if (editorConfig.forceVisibleFieldKeys?.includes(field.key)) return true;
+      if (fieldHasSavedValue(formValues[field.key]) || (field.secret && editing.secretStatus[field.key])) return true;
       return !editorConfig.advancedFieldKeys.includes(field.key);
     })
     : [];
@@ -794,9 +795,9 @@ function primaryAction(props: {
       action: props.onWeixinQr ?? props.onEdit,
     };
   }
-  if (connector.configured && !props.gatewayRunning) {
+  if (connector.configured && connector.runtimeStatus !== "running") {
     return {
-      label: "启动 Gateway",
+      label: connector.runtimeStatus === "error" ? "重启 Gateway" : "启动 Gateway",
       tone: "green" as const,
       icon: props.busy === "gateway-start" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />,
       disabled: props.busy === "gateway-start",
@@ -1135,6 +1136,9 @@ function FieldEditor(props: {
         value={typeof props.value === "string" ? props.value : ""}
         onChange={(event) => props.onChange(event.target.value)}
       />
+      {field.secret && props.connector.secretStatus[field.key] ? (
+        <span className="mt-1 block text-[11px] text-emerald-600">已保存密钥，留空保存不会覆盖。</span>
+      ) : null}
       <span className="mt-1 block truncate font-mono text-[11px] text-slate-400">{field.envVar}</span>
     </label>
   );
@@ -1193,6 +1197,11 @@ function withConnectorDefaults(platformId: HermesConnectorPlatformId, values: Fo
     }
   }
   return next;
+}
+
+function fieldHasSavedValue(value: string | boolean | undefined) {
+  if (typeof value === "boolean") return value;
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function connectorKey(connector: Pick<HermesConnectorConfig, "platform" | "instanceId">) {

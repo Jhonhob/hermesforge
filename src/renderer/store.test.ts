@@ -96,6 +96,35 @@ describe("renderer store task projections", () => {
     expect(projection.actualEngine).toBe("hermes");
   });
 
+  it("clears the running task marker when a terminal task event arrives", () => {
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-terminal",
+      userInput: "长对话结束",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+
+    expect(useAppStore.getState().runningTaskRunId).toBe("task-terminal");
+
+    useAppStore.getState().applyTaskEvent({
+      taskRunId: "task-terminal",
+      workSessionId: "session-1",
+      sessionId: "task-terminal",
+      engineId: "hermes",
+      event: {
+        type: "lifecycle",
+        stage: "completed",
+        message: "Hermes 任务生命周期已完成。",
+        at: "2026-05-20T10:00:02.000Z",
+      },
+    });
+
+    const state = useAppStore.getState();
+    expect(state.taskRunProjectionsById["task-terminal"]?.status).toBe("complete");
+    expect(state.runningTaskRunId).toBeUndefined();
+    expect(state.runningSessionId).toBeUndefined();
+  });
+
   it("filters Hermes CLI session lifecycle output from chat projections", () => {
     useAppStore.getState().beginTaskRun({
       workSessionId: "session-1",

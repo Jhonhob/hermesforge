@@ -183,6 +183,7 @@ export function DashboardView(props: {
           onOpenSessionFolder={props.onOpenSessionFolder}
           onOpenSupport={props.onOpenSupport}
           inspectorOpen={store.inspectorOpen}
+          workspaceDrawerOpen={store.workspaceDrawerOpen}
           agentPanelOpen={store.agentPanelOpen}
         />
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -244,6 +245,7 @@ export function DashboardView(props: {
                 onRestoreSnapshot={props.onRestoreSnapshot}
                 onOpenFix={props.onOpenFix}
                 onUsePromptSuggestion={(prompt) => store.setUserInput(prompt)}
+                onOpenWorkspaceDrawer={() => store.setWorkspaceDrawerOpen(true)}
                 canStart={canStart}
                 sendBlockReason={sendBlock?.message}
                 sendBlockTarget={sendBlock?.target}
@@ -290,7 +292,15 @@ export function DashboardView(props: {
         </div>
       </div>
 
-      <WorkspaceDrawer onPickWorkspace={props.onPickWorkspace} onSelectWorkspace={props.onSelectWorkspace} onRefreshFileTree={props.onRefreshFileTree} />
+      <WorkspaceDrawer
+        onClose={() => store.setWorkspaceDrawerOpen(false)}
+        onPickWorkspace={props.onPickWorkspace}
+        onSelectWorkspace={(workspacePath) => {
+          props.onSelectWorkspace(workspacePath);
+          store.setWorkspaceDrawerOpen(false);
+        }}
+        onRefreshFileTree={props.onRefreshFileTree}
+      />
 
       <ContextInspector
         open={store.inspectorOpen}

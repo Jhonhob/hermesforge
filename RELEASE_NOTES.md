@@ -1,5 +1,33 @@
 # Release Notes
 
+## Hermes Forge v0.2.24
+
+发布日期：2026-05-20
+
+这是一次长对话稳定性、token 真实性与飞书多机器人二次修复版本。重点处理用户连续反馈的长时间对话结束后状态卡住、token 卡片把旧实测误当成本轮实测、以及飞书多实例在 Gateway 已运行时仍无法可靠启动/编辑的问题。
+
+### 核心修复
+
+- **长对话结束后不再卡在运行中**：任务收到 completed / failed / cancelled / interrupted 终态事件后会清理当前运行标记，重启恢复时也不再沿用旧的 running task，避免长对话报错后下一轮被旧状态挡住。
+- **Token 计数不再拿旧实测冒充本轮实测**：同一任务内 actual 仍优先于 estimated，但不同任务之间按最新一轮展示；如果最新一轮只有估算，输入框与 Agent 面板会明确标为“估算”，不会继续显示上一轮“实测”。
+- **Late estimate 不再覆盖 actual usage**：后端 usage meter 已收到 actual 后会忽略后到的 estimated usage，避免 provider/Hermes 已返回真实用量后又被 stdout 估算值抬高或污染。
+- **飞书多实例启动判断修正**：只包含 `feishu:*` 的 Gateway 状态不再被误认为主连接器 Gateway；当一个飞书机器人已运行时，另一个停止中的飞书实例仍可从 UI 触发启动。
+- **飞书旧配置迁移更稳**：从旧 `.env` 导入 `FEISHU_*` 时会进入 `default` 实例，不会覆盖或删除已有其它 Bot 实例；旧版未带 `feishu:default` 前缀的运行状态也会映射到默认实例。
+- **飞书实例目录清理覆盖 Agent profile**：同步配置时会在默认 Hermes home 与各 Agent profile 的 `connector-instances/feishu` 下清理失效目录，避免旧 Bot home 残留影响状态判断。
+
+### 体验优化
+
+- **飞书编辑器保留高级字段**：已保存过值或密钥的飞书高级字段再次编辑时保持可见，并提示“已保存密钥，留空保存不会覆盖”，减少用户误以为配置丢失。
+- **工作区文件入口更明确**：Header 与空会话页增加工作区文件入口，抽屉支持 Escape 和收起按钮关闭，切换工作区后自动收起。
+- **长回复排版更稳**：聊天气泡、Markdown、代码块、链接和 inline code 增强换行与最大宽度约束，降低长代码/长 URL 撑破对话布局的概率。
+
+### 验证
+
+- `npm run check` 通过
+- `npm test` 通过
+- `npm run build` 通过
+- `git diff --check` / secret-pattern scan 通过
+
 ## Hermes Forge v0.2.22
 
 发布日期：2026-05-18

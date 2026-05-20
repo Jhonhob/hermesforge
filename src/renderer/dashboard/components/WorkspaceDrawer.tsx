@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Check, ChevronRight, Eye, File, Folder, FolderPlus, Plus, Search, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronLeft, ChevronRight, Eye, File, Folder, FolderPlus, Search, X } from "lucide-react";
 import type { FileTreeEntry } from "../../../shared/types";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
 
 export function WorkspaceDrawer(props: {
+  onClose: () => void;
   onPickWorkspace: () => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onRefreshFileTree: () => void;
@@ -13,6 +14,7 @@ export function WorkspaceDrawer(props: {
   const [query, setQuery] = useState("");
   const [previewPath, setPreviewPath] = useState<string | undefined>();
   const [previewContent, setPreviewContent] = useState<string | undefined>();
+  const onClose = props.onClose;
 
   const tree = store.fileTree;
   const visibleFiles = tree?.entries?.filter((entry) => {
@@ -20,6 +22,15 @@ export function WorkspaceDrawer(props: {
     const q = query.toLowerCase();
     return entry.name.toLowerCase().includes(q);
   });
+
+  useEffect(() => {
+    if (!store.workspaceDrawerOpen) return undefined;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, store.workspaceDrawerOpen]);
 
   async function handlePreview(path: string) {
     if (previewPath === path) {
@@ -38,13 +49,13 @@ export function WorkspaceDrawer(props: {
   }
 
   return (
-    <aside className={cn("absolute left-0 top-0 z-30 flex h-full w-72 flex-col border-r border-slate-200 bg-white transition-transform", store.workspaceDrawerOpen ? "translate-x-0" : "-translate-x-full")}>
+    <aside className={cn("absolute left-0 top-12 z-30 flex h-[calc(100%-3rem)] w-72 flex-col border-r border-slate-200 bg-white shadow-[18px_0_45px_rgba(15,23,42,0.08)] transition-transform", store.workspaceDrawerOpen ? "translate-x-0" : "-translate-x-full")}>
       <div className="flex h-12 items-center justify-between border-b border-slate-200 px-3">
         <div className="flex items-center gap-2">
           <Folder size={16} className="text-slate-500" />
           <span className="text-sm font-medium text-slate-700">工作区文件</span>
         </div>
-        <button className="grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100" onClick={() => store.setWorkspaceDrawerOpen(false)} type="button">
+        <button className="grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700" onClick={onClose} title="收起工作区文件" aria-label="收起工作区文件" type="button">
           <X size={14} />
         </button>
       </div>
@@ -57,6 +68,9 @@ export function WorkspaceDrawer(props: {
         <div className="mt-2 flex gap-2">
           <button className={primaryActionClass} onClick={props.onPickWorkspace} type="button">
             <FolderPlus size={12} /> 选择工作区
+          </button>
+          <button className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50" onClick={onClose} type="button">
+            <ChevronLeft size={12} /> 收起
           </button>
         </div>
         <p className="mt-2 text-[11px] leading-5 text-slate-400">

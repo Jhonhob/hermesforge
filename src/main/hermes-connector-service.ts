@@ -367,7 +367,7 @@ export class HermesConnectorService {
     ];
     const syncedAt = new Date().toISOString();
 
-    const feishuInstanceIds: string[] = [];
+    const feishuInstanceHomes: string[] = [];
     for (const platform of PLATFORM_REGISTRY) {
       const config = stored.platforms?.[platform.id];
       if (!config || config.enabled === false) continue;
@@ -380,7 +380,7 @@ export class HermesConnectorService {
           if (envLines.length === 0) continue;
           await this.writeFeishuInstanceEnv(instanceId, instance, envLines);
           instance.lastSyncedAt = syncedAt;
-          feishuInstanceIds.push(instanceId);
+          feishuInstanceHomes.push(await this.feishuInstanceHome(instanceId, instance));
         }
         stored.platforms!.feishu = this.ensureFeishuInstances(config);
         continue;
@@ -398,13 +398,13 @@ export class HermesConnectorService {
     const existing = await fs.readFile(envPath, "utf8").catch(() => "");
     await this.backupEnv(envPath, existing);
     const withoutBlock = removeManagedBlock(existing).trimEnd();
-    const hasAnyConnector = lines.some((line) => line.includes("=")) || feishuInstanceIds.length > 0;
+    const hasAnyConnector = lines.some((line) => line.includes("=")) || feishuInstanceHomes.length > 0;
     const next = hasAnyConnector
       ? `${withoutBlock ? `${withoutBlock}\n\n` : ""}${lines.join("\n")}\n`
       : `${withoutBlock}${withoutBlock ? "\n" : ""}`;
     await fs.mkdir(path.dirname(envPath), { recursive: true });
     await fs.writeFile(envPath, next, "utf8");
-    await this.pruneStaleFeishuInstanceHomes(feishuInstanceIds);
+    await this.pruneStaleFeishuInstanceHomes(feishuInstanceHomes);
     await fs.chmod(envPath, 0o600).catch((error) => {
       console.warn("[Hermes Forge] Failed to apply strict permissions to connector .env:", error);
     });
@@ -616,53 +616,59 @@ export class HermesConnectorService {
     const feishuInstances = await this.configuredFeishuInstances(stored);
     const hasNonFeishuConnector = await this.hasConfiguredNonFeishuConnector(stored, hermesEnv);
     let mainStarted = false;
-    if (hasNonFeishuConnector) {
-    const launch = await this.gatewayLaunchFromRuntime(runtime, hermesEnv);
-    console.info("[Hermes Forge] Gateway launch", {
-      command: launch.command,
-      args: launch.args,
-      cwd: launch.cwd,
-      label: launch.label,
-      runtimeMode: runtime.runtime.mode,
-      distro: runtime.runtime.distro,
-      hermesRoot: runtime.root,
+    const mainGatewayAlreadyRunning = hasMainGatewayRuntime(current, {
+      managedMainRunning: Boolean(this.gatewayProcess && !this.gatewayProcess.killed),
+      managedFeishuCount: this.feishuGatewayProcesses.size,
     });
-    const child = spawn(launch.command, launch.args, {
-      cwd: launch.cwd,
-      env: launch.env,
-      windowsHide: true,
-      shell: false,
-    });
-    this.gatewayProcess = child;
-    this.gatewayStartedAt = new Date().toISOString();
-    this.gatewayOutput = "";
-    this.gatewayError = "";
-    this.gatewayExitMessage = "";
-    this.gatewayBackoffUntil = undefined;
-    this.gatewayOutput = `Using runtime: ${launch.label}`;
-    child.stdout.on("data", (chunk: Buffer) => {
-      this.gatewayOutput = trimLog(`${this.gatewayOutput}${chunk.toString("utf8")}`);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      this.gatewayError = trimLog(`${this.gatewayError}${chunk.toString("utf8")}`);
-    });
-    child.on("error", (error) => {
-      this.gatewayError = trimLog(`${this.gatewayError}\n${error.message}`);
-    });
-    child.on("close", (exitCode) => {
-      this.handleGatewayProcessClose(child, exitCode);
-    });
-    await this.sleep(1200);
-    const status = await this.status();
-    if (!status.running) {
-      this.gatewayAutoStartState = "failed";
-      this.gatewayAutoStartMessage = status.lastError || status.message || "Gateway 启动失败。";
-      return {
-        ok: false,
-        status,
-        message: status.lastError || status.message || "Gateway 启动失败。",
-      };
-    }
+    if (hasNonFeishuConnector && !mainGatewayAlreadyRunning) {
+      const launch = await this.gatewayLaunchFromRuntime(runtime, hermesEnv);
+      console.info("[Hermes Forge] Gateway launch", {
+        command: launch.command,
+        args: launch.args,
+        cwd: launch.cwd,
+        label: launch.label,
+        runtimeMode: runtime.runtime.mode,
+        distro: runtime.runtime.distro,
+        hermesRoot: runtime.root,
+      });
+      const child = spawn(launch.command, launch.args, {
+        cwd: launch.cwd,
+        env: launch.env,
+        windowsHide: true,
+        shell: false,
+      });
+      this.gatewayProcess = child;
+      this.gatewayStartedAt = new Date().toISOString();
+      this.gatewayOutput = "";
+      this.gatewayError = "";
+      this.gatewayExitMessage = "";
+      this.gatewayBackoffUntil = undefined;
+      this.gatewayOutput = `Using runtime: ${launch.label}`;
+      child.stdout.on("data", (chunk: Buffer) => {
+        this.gatewayOutput = trimLog(`${this.gatewayOutput}${chunk.toString("utf8")}`);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        this.gatewayError = trimLog(`${this.gatewayError}${chunk.toString("utf8")}`);
+      });
+      child.on("error", (error) => {
+        this.gatewayError = trimLog(`${this.gatewayError}\n${error.message}`);
+      });
+      child.on("close", (exitCode) => {
+        this.handleGatewayProcessClose(child, exitCode);
+      });
+      await this.sleep(1200);
+      const status = await this.status();
+      if (!status.running) {
+        this.gatewayAutoStartState = "failed";
+        this.gatewayAutoStartMessage = status.lastError || status.message || "Gateway 启动失败。";
+        return {
+          ok: false,
+          status,
+          message: status.lastError || status.message || "Gateway 启动失败。",
+        };
+      }
+      mainStarted = true;
+    } else if (hasNonFeishuConnector) {
       mainStarted = true;
     }
     for (const [instanceId, instance] of feishuInstances) {
@@ -1429,6 +1435,42 @@ export class HermesConnectorService {
     let changed = false;
 
     for (const platform of PLATFORM_REGISTRY) {
+      if (platform.id === "feishu") {
+        const feishu = this.ensureFeishuInstances(stored.platforms?.feishu);
+        const current = feishu.instances!.default ?? {};
+        const values: Record<string, string | boolean> = { ...(current.values ?? {}) };
+        const secretRefs: Record<string, string> = { ...(current.secretRefs ?? {}) };
+        let importedForPlatform = false;
+
+        for (const field of platform.fields) {
+          const raw = envValues[field.envVar];
+          if (typeof raw === "undefined" || !String(raw).trim()) continue;
+          importedForPlatform = true;
+          changed = true;
+          if (field.secret) {
+            const ref = secretRef(platform.id, field.key, "default");
+            await this.secretVault.saveSecret(ref, String(raw).trim());
+            secretRefs[field.key] = ref;
+            importedSecretRefs.push(ref);
+            continue;
+          }
+          values[field.key] = field.type === "boolean" ? parseBoolean(raw) : String(raw).trim();
+        }
+
+        if (!importedForPlatform) continue;
+        stored.platforms ??= {};
+        feishu.instances!.default = {
+          ...current,
+          enabled: current.enabled ?? true,
+          values,
+          secretRefs,
+          updatedAt: new Date().toISOString(),
+          lastSyncedAt: current.lastSyncedAt,
+        };
+        stored.platforms.feishu = feishu;
+        importedPlatforms.push(platform.id);
+        continue;
+      }
       const current = stored.platforms?.[platform.id] ?? {};
       const values: Record<string, string | boolean> = { ...(current.values ?? {}) };
       const secretRefs: Record<string, string> = { ...(current.secretRefs ?? {}) };
@@ -2012,13 +2054,28 @@ export class HermesConnectorService {
     });
   }
 
-  private async pruneStaleFeishuInstanceHomes(activeInstanceIds: string[]) {
-    const root = path.join(await this.activeHermesHome(), "connector-instances", "feishu");
-    const keep = new Set(activeInstanceIds.map((id) => normalizeFeishuInstanceId(id)));
-    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
-    await Promise.all(entries
-      .filter((entry) => entry.isDirectory() && !keep.has(entry.name))
-      .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => undefined)));
+  private async pruneStaleFeishuInstanceHomes(activeInstanceHomes: string[]) {
+    const roots = await this.feishuInstanceRoots();
+    const keep = new Set(activeInstanceHomes.map((home) => normalizeFsPath(home)));
+    await Promise.all(roots.map(async (root) => {
+      const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+      await Promise.all(entries
+        .filter((entry) => entry.isDirectory() && !keep.has(normalizeFsPath(path.join(root, entry.name))))
+        .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true }).catch(() => undefined)));
+    }));
+  }
+
+  private async feishuInstanceRoots() {
+    const base = this.baseHermesHome();
+    const roots = [path.join(base, "connector-instances", "feishu")];
+    const profileRoot = path.join(base, "profiles");
+    const profiles = await fs.readdir(profileRoot, { withFileTypes: true }).catch(() => []);
+    for (const profile of profiles) {
+      if (profile.isDirectory()) {
+        roots.push(path.join(profileRoot, profile.name, "connector-instances", "feishu"));
+      }
+    }
+    return roots;
   }
 
   private hermesCliPath(root: string) {
@@ -2245,12 +2302,27 @@ function connectorStatus(enabled: boolean, configured: boolean): HermesConnector
 function connectorRuntimeStatus(platformId: string, enabled: boolean, configured: boolean, gateway: HermesGatewayStatus): HermesConnectorConfig["runtimeStatus"] {
   if (!enabled || !configured) return "stopped";
   const hasPlatformState = Boolean(gateway.platformStates && Object.keys(gateway.platformStates).length > 0);
-  const platformState = gateway.platformStates?.[platformId]?.toLowerCase();
+  const platformState = (gateway.platformStates?.[platformId]
+    ?? (platformId === feishuRuntimeKey("default") ? gateway.platformStates?.feishu : undefined))
+    ?.toLowerCase();
   if (platformState === "connected") return "running";
   if (platformState && platformState !== "connected") return "error";
   if (gateway.running && !hasPlatformState) return "running";
   if (gateway.healthStatus === "error" || Boolean(gateway.lastError)) return "error";
   return "stopped";
+}
+
+function hasMainGatewayRuntime(gateway: HermesGatewayStatus, options: { managedMainRunning: boolean; managedFeishuCount: number }) {
+  if (options.managedMainRunning) return true;
+  if (!gateway.running) return false;
+  const platformKeys = Object.keys(gateway.platformStates ?? {});
+  if (platformKeys.some((key) => !isFeishuPlatformKey(key))) return true;
+  if (platformKeys.length > 0) return false;
+  return options.managedFeishuCount === 0;
+}
+
+function isFeishuPlatformKey(key: string) {
+  return key === "feishu" || key.startsWith("feishu:");
 }
 
 function statusMessage(status: HermesConnectorStatus, runtimeStatus: HermesConnectorConfig["runtimeStatus"], missing: string[]) {
@@ -2277,6 +2349,11 @@ function unquoteEnv(value: string) {
     return value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
   }
   return value;
+}
+
+function normalizeFsPath(value: string) {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function buildPythonEnv(baseEnv?: NodeJS.ProcessEnv, pythonPathEntries: string[] = []): NodeJS.ProcessEnv {
@@ -2722,6 +2799,8 @@ export const testOnly = {
   parseCommandLine,
   parseWeixinQrEvent,
   buildGatewayEnv,
+  hasMainGatewayRuntime,
+  connectorRuntimeStatus,
   splitGatewayStderr,
   looksLikeGatewayRunning,
   removeManagedBlock,

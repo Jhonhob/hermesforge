@@ -43,7 +43,7 @@ const MemoizedMarkdownBlock = React.memo(function MarkdownBlock(props: { content
           const match = /language-(\w+)/.exec(className ?? "");
           const content = String(children).replace(/\n$/, "");
           if (match) return <CodeBlock code={content} language={match[1]} />;
-          return <code className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.92em] text-slate-800">{children}</code>;
+          return <code className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.92em] text-slate-800 [overflow-wrap:anywhere]">{children}</code>;
         },
         hr() {
           return <hr className="my-4 border-slate-200/80" />;
