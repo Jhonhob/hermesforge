@@ -197,6 +197,54 @@ describe("AgentRunPanel", () => {
     expect(screen.queryByText("实测上下文")).toBeNull();
   });
 
+  it("does not mix another session's running task into the active session panel", () => {
+    useAppStore.setState({
+      activeSessionId: "session-1",
+      runningTaskRunId: "task-foreign",
+      events: [
+        { taskRunId: "task-active", workSessionId: "session-1", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 100, outputTokens: 50, totalTokens: 150, estimatedCostUsd: 0.001, message: "active", at: "2026-05-20T10:00:00.000Z" } },
+        { taskRunId: "task-foreign", workSessionId: "session-2", engineId: "hermes", event: { type: "usage", source: "actual", inputTokens: 9000, outputTokens: 9000, totalTokens: 18000, estimatedCostUsd: 0.09, message: "foreign", at: "2026-05-20T10:01:00.000Z" } },
+      ],
+      taskRunProjectionsById: {
+        "task-active": {
+          taskRunId: "task-active",
+          workSessionId: "session-1",
+          status: "complete",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          modelId: "session-one-model",
+          toolEvents: [],
+          startedAt: "2026-05-20T10:00:00.000Z",
+          updatedAt: "2026-05-20T10:00:01.000Z",
+          assistantMessage: { id: "agent-active", sessionId: "session-1", taskId: "task-active", role: "agent", content: "active done", createdAt: "2026-05-20T10:00:01.000Z", visibleInChat: true },
+        },
+        "task-foreign": {
+          taskRunId: "task-foreign",
+          workSessionId: "session-2",
+          status: "running",
+          engineId: "hermes",
+          actualEngine: "hermes",
+          modelId: "foreign-model",
+          toolEvents: [],
+          startedAt: "2026-05-20T10:01:00.000Z",
+          updatedAt: "2026-05-20T10:01:01.000Z",
+          assistantMessage: { id: "agent-foreign", sessionId: "session-2", taskId: "task-foreign", role: "agent", content: "", createdAt: "2026-05-20T10:01:01.000Z", visibleInChat: true },
+        },
+      },
+      taskRunOrderBySession: {
+        "session-1": ["task-active"],
+        "session-2": ["task-foreign"],
+      },
+    });
+
+    render(<AgentRunPanel open />);
+
+    expect(screen.getAllByText("session-one-model").length).toBeGreaterThan(0);
+    expect(screen.queryByText("foreign-model")).toBeNull();
+    expect(screen.getByText("实测 150")).toBeInTheDocument();
+    expect(screen.queryByText("实测 18K")).toBeNull();
+  });
+
   it("uses latest usage per task run instead of double-counting cumulative events", () => {
     useAppStore.setState({
       events: [

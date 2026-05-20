@@ -1,5 +1,35 @@
 # Release Notes
 
+## Hermes Forge v0.2.27
+
+发布日期：2026-05-20
+
+这是一次面向聊天层稳定性的闭环修复版本。重点解决模型思考中切换会话后运行态被误中断、跨会话误取消任务、草稿与附件丢失，以及聊天入口模型切换没有清晰 Gateway 同步反馈的问题。
+
+### 核心修复
+
+- **切换会话不再终止正在思考的任务**：会话重建投影时会保留真实运行中的 task run，不再把当前 streaming/running 任务误标为 interrupted。
+- **停止按钮不再误取消其他会话任务**：聊天层现在区分当前会话运行任务与其他会话运行任务；只有当前会话拥有任务时才显示停止按钮。
+- **Agent 运行面板不再串会话**：右侧面板只展示当前会话的运行或历史任务，避免把另一个会话的 running task 和当前会话事件混在一起。
+- **草稿、附件和已选文件按会话保留**：切换会话会保存并恢复当前输入、上传附件和文件选择；发送成功后只清理当前会话的附件与草稿。
+- **审批/澄清卡按会话隔离**：pending approval 与 clarify 卡片会按 task run 或 session 归属过滤，避免切换会话后看到别的会话的操作卡。
+- **聊天层模型切换走统一 Gateway 同步入口**：输入框模型菜单和 `/model` 命令改为调用 `setDefaultModel`，用户能看到 Gateway 同步或自动重启结果。
+- **本地 slash 命令运行中更安全**：任务运行中会阻止 `/clear`、`/new`、`/workspace`、`/model`、`/theme`、`/usage`、`/compact` 等会改变状态的命令。
+- **发送前 workspace 校验前置**：需要真实工作区的请求会在创建 task run 之前拦截，避免产生幽灵任务。
+
+### 体验优化
+
+- **其他会话运行时提示更明确**：当前仍保持单任务运行模型，但会明确提示哪个会话正在运行，不再给用户一个可误点的停止入口。
+- **上下文压缩读取当前会话投影**：`/compact` 改为从 task projections 读取当前会话上下文，和当前聊天记录来源保持一致。
+
+### 验证
+
+- `npm test -- src/renderer/store.test.ts src/renderer/dashboard/ChatInput.test.tsx src/renderer/dashboard/DashboardView.test.tsx src/renderer/dashboard/components/AgentRunPanel.test.tsx` 通过，73 个测试全部成功
+- `npm run check` 通过
+- `npm test` 通过，52 个测试文件、406 个测试全部成功
+- `npm run build` 通过
+- `git diff --check` 通过
+
 ## Hermes Forge v0.2.26
 
 发布日期：2026-05-20

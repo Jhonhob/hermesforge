@@ -36,13 +36,14 @@ describe("ChatInput", () => {
     } as unknown as Window["workbenchClient"];
   });
 
-  function renderInput(onStartTask = vi.fn()) {
+  function renderInput(onStartTask = vi.fn(), options?: { onCancelTask?: () => void; canStart?: boolean; sendBlockReason?: string }) {
     render(
       <ChatInput
         onStartTask={onStartTask}
-        onCancelTask={vi.fn()}
+        onCancelTask={options?.onCancelTask ?? vi.fn()}
         onRestoreSnapshot={vi.fn()}
-        canStart
+        canStart={options?.canStart ?? true}
+        sendBlockReason={options?.sendBlockReason}
         latestSnapshotAvailable={false}
         locked={false}
       />,
@@ -86,8 +87,156 @@ describe("ChatInput", () => {
 
     const cards = useAppStore.getState().pendingClarifyCards;
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ id: "slash-help", status: "pending" });
+    expect(cards[0]).toMatchObject({ id: "slash-help-session-1", sessionId: "session-1", status: "pending" });
     expect(useAppStore.getState().userInput).toBe("");
+  });
+
+  it("shows stop only for the active session running task", () => {
+    const onCancelTask = vi.fn();
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-active",
+      userInput: "当前会话任务",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+
+    renderInput(vi.fn(), { onCancelTask });
+
+    fireEvent.click(screen.getByRole("button", { name: "停止 Hermes" }));
+    expect(onCancelTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not show a destructive stop button for another session running task", () => {
+    const onCancelTask = vi.fn();
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-other",
+      taskRunId: "task-other",
+      userInput: "其他会话任务",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+
+    renderInput(vi.fn(), { onCancelTask, canStart: false, sendBlockReason: "另一个会话正在运行，完成后再发送。" });
+
+    expect(screen.queryByRole("button", { name: "停止 Hermes" })).toBeNull();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(onCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("blocks state-changing local slash commands while any task is running", () => {
+    const setDefaultModel = vi.fn(async () => ({ success: true, defaultModelId: "main", models: useAppStore.getState().runtimeConfig?.modelProfiles ?? [] }));
+    window.workbenchClient = {
+      ...window.workbenchClient,
+      setDefaultModel,
+    } as unknown as Window["workbenchClient"];
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-other",
+      taskRunId: "task-other",
+      userInput: "其他会话任务",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+
+    renderInput();
+    const input = screen.getByLabelText("给 Hermes 发送消息");
+    fireEvent.change(input, { target: { value: "/model main" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(setDefaultModel).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toasts.at(-1)?.title).toBe("任务运行中");
+  });
+
+  it("switches models through setDefaultModel so Gateway sync feedback is visible", async () => {
+    const setDefaultModel = vi.fn(async () => ({
+      success: true,
+      message: "模型已保存，Gateway 已自动重启。",
+      defaultModelId: "alt",
+      models: useAppStore.getState().runtimeConfig?.modelProfiles ?? [],
+    }));
+    const saveRuntimeConfig = vi.fn();
+    useAppStore.setState({
+      runtimeConfig: {
+        defaultModelProfileId: "main",
+        modelProfiles: [
+          { id: "main", provider: "custom", model: "qwen", maxTokens: 1000 },
+          { id: "alt", provider: "custom", model: "MiniMax-M2.7", name: "MiniMax", maxTokens: 1000 },
+        ],
+        updateSources: {},
+      },
+    });
+    window.workbenchClient = {
+      ...window.workbenchClient,
+      setDefaultModel,
+      saveRuntimeConfig,
+    } as unknown as Window["workbenchClient"];
+
+    renderInput();
+    const input = screen.getByLabelText("给 Hermes 发送消息");
+    fireEvent.change(input, { target: { value: "/model MiniMax" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(setDefaultModel).toHaveBeenCalledWith("alt"));
+    expect(saveRuntimeConfig).not.toHaveBeenCalled();
+    expect(useAppStore.getState().runtimeConfig?.defaultModelProfileId).toBe("alt");
+    expect(useAppStore.getState().runtimeConfig?.modelRoleAssignments?.chat).toBe("alt");
+    expect(useAppStore.getState().toasts.at(-1)?.message).toBe("模型已保存，Gateway 已自动重启。");
+  });
+
+  it("uses setDefaultModel from the inline model menu", async () => {
+    const setDefaultModel = vi.fn(async () => ({
+      success: true,
+      message: "Gateway 已同步新模型。",
+      defaultModelId: "alt",
+      models: useAppStore.getState().runtimeConfig?.modelProfiles ?? [],
+    }));
+    useAppStore.setState({
+      runtimeConfig: {
+        defaultModelProfileId: "main",
+        modelProfiles: [
+          { id: "main", provider: "custom", model: "qwen", maxTokens: 1000 },
+          { id: "alt", provider: "custom", model: "MiniMax-M2.7", name: "MiniMax", maxTokens: 1000 },
+        ],
+        updateSources: {},
+      },
+    });
+    window.workbenchClient = {
+      ...window.workbenchClient,
+      setDefaultModel,
+    } as unknown as Window["workbenchClient"];
+
+    renderInput();
+    fireEvent.click(screen.getByRole("button", { name: "qwen" }));
+    fireEvent.click(screen.getByText("MiniMax"));
+
+    await waitFor(() => expect(setDefaultModel).toHaveBeenCalledWith("alt"));
+    expect(useAppStore.getState().runtimeConfig?.defaultModelProfileId).toBe("alt");
+  });
+
+  it("compacts the active session from task projections instead of legacy messages", () => {
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-1",
+      userInput: "第一轮需求：检查模型配置。",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+    useAppStore.getState().finalizeTaskRun("task-1", { status: "complete", content: "第一轮回答：模型配置正常。" });
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-2",
+      userInput: "第二轮需求：继续看网关状态。",
+      createdAt: "2026-05-20T10:02:00.000Z",
+    });
+    useAppStore.getState().finalizeTaskRun("task-2", { status: "complete", content: "第二轮回答：网关需要重启。" });
+    useAppStore.setState({
+      conversationMessages: [],
+      userInput: "/compact MiniMax",
+    });
+
+    renderInput();
+    fireEvent.keyDown(screen.getByLabelText("给 Hermes 发送消息"), { key: "Enter" });
+
+    const compactMessage = useAppStore.getState().conversationMessages[0];
+    expect(compactMessage?.content).toContain("第一轮需求");
+    expect(compactMessage?.content).toContain("第二轮回答");
+    expect(useAppStore.getState().userInput).toBe("请基于压缩后的上下文继续，重点关注：MiniMax");
   });
 
   it("shows actual context usage and remaining window when usage events are available", () => {

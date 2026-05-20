@@ -12,7 +12,7 @@ import type { SessionActions, SessionState } from "./store/sessionSlice";
 import type { TaskActions, TaskState } from "./store/taskSlice";
 import type { DashboardActions, DashboardState } from "./store/dashboardSlice";
 import type { FeedbackActions, FeedbackState } from "./store/feedbackSlice";
-import type { SessionMessage, TaskRunProjection, TaskRunStatus } from "../shared/types";
+import type { SessionAttachment, SessionMessage, TaskRunProjection, TaskRunStatus } from "../shared/types";
 
 export type ViewId = "home" | "engines" | "memory" | "admin" | "settings" | "support" | "logs";
 export type RecentWorkspace = {
@@ -31,6 +31,26 @@ export type EngineWarmupState = {
   provider?: string;
   model?: string;
   authMode?: string;
+};
+
+export type SessionEphemeralState = {
+  sessionDrafts: Record<string, string>;
+  selectedFilesBySessionId: Record<string, string[]>;
+  attachmentsBySessionId: Record<string, SessionAttachment[]>;
+};
+
+export type SessionEphemeralActions = {
+  saveSessionEphemeralState(sessionId?: string): void;
+  restoreSessionEphemeralState(sessionId?: string): void;
+  setSessionEphemeralState(
+    sessionId: string | undefined,
+    patch: Partial<{
+      userInput: string;
+      selectedFiles: string[];
+      attachments: SessionAttachment[];
+    }>,
+  ): void;
+  clearSessionEphemeralState(sessionId?: string): void;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -169,7 +189,8 @@ export type AppStore =
   SessionState & SessionActions &
   TaskState & TaskActions &
   DashboardState & DashboardActions &
-  FeedbackState & FeedbackActions & {
+  FeedbackState & FeedbackActions &
+  SessionEphemeralState & SessionEphemeralActions & {
     resetStore(): void;
   };
 
@@ -177,20 +198,74 @@ let initialStoreSnapshot: Partial<AppStore> | undefined;
 
 const useAppStoreBase = create<AppStore>()(
   persist(
-    (...a) => ({
-      ...uiSlice(...a),
-      ...configSlice(...a),
-      ...sessionSlice(...a),
-      ...taskSlice(...a),
-      ...dashboardSlice(...a),
-      ...feedbackSlice(...a),
-      resetStore: () => {
-        const [set] = a;
-        if (initialStoreSnapshot) {
-          set({ ...initialStoreSnapshot } as AppStore);
-        }
-      },
-    }),
+    (...a) => {
+      const [set, get] = a;
+      return {
+        ...uiSlice(...a),
+        ...configSlice(...a),
+        ...sessionSlice(...a),
+        ...taskSlice(...a),
+        ...dashboardSlice(...a),
+        ...feedbackSlice(...a),
+        sessionDrafts: {},
+        selectedFilesBySessionId: {},
+        attachmentsBySessionId: {},
+        saveSessionEphemeralState: (sessionId?: string) => {
+          if (!sessionId) return;
+          const state = get();
+          set({
+            sessionDrafts: { ...state.sessionDrafts, [sessionId]: state.userInput },
+            selectedFilesBySessionId: { ...state.selectedFilesBySessionId, [sessionId]: state.selectedFiles },
+            attachmentsBySessionId: { ...state.attachmentsBySessionId, [sessionId]: state.attachments },
+          } as Partial<AppStore>);
+        },
+        restoreSessionEphemeralState: (sessionId?: string) => {
+          if (!sessionId) {
+            set({ userInput: "", selectedFiles: [], attachments: [] } as Partial<AppStore>);
+            return;
+          }
+          const state = get();
+          set({
+            userInput: state.sessionDrafts[sessionId] ?? "",
+            selectedFiles: state.selectedFilesBySessionId[sessionId] ?? [],
+            attachments: state.attachmentsBySessionId[sessionId] ?? [],
+          } as Partial<AppStore>);
+        },
+        setSessionEphemeralState: (sessionId, patch) => {
+          if (!sessionId) return;
+          const state = get();
+          const nextDraft = patch.userInput ?? (state.activeSessionId === sessionId ? state.userInput : state.sessionDrafts[sessionId] ?? "");
+          const nextSelectedFiles = patch.selectedFiles ?? (state.activeSessionId === sessionId ? state.selectedFiles : state.selectedFilesBySessionId[sessionId] ?? []);
+          const nextAttachments = patch.attachments ?? (state.activeSessionId === sessionId ? state.attachments : state.attachmentsBySessionId[sessionId] ?? []);
+          set({
+            sessionDrafts: { ...state.sessionDrafts, [sessionId]: nextDraft },
+            selectedFilesBySessionId: { ...state.selectedFilesBySessionId, [sessionId]: nextSelectedFiles },
+            attachmentsBySessionId: { ...state.attachmentsBySessionId, [sessionId]: nextAttachments },
+            ...(state.activeSessionId === sessionId
+              ? { userInput: nextDraft, selectedFiles: nextSelectedFiles, attachments: nextAttachments }
+              : {}),
+          } as Partial<AppStore>);
+        },
+        clearSessionEphemeralState: (sessionId?: string) => {
+          if (!sessionId) return;
+          const state = get();
+          const { [sessionId]: _draft, ...sessionDrafts } = state.sessionDrafts;
+          const { [sessionId]: _files, ...selectedFilesBySessionId } = state.selectedFilesBySessionId;
+          const { [sessionId]: _attachments, ...attachmentsBySessionId } = state.attachmentsBySessionId;
+          set({
+            sessionDrafts,
+            selectedFilesBySessionId,
+            attachmentsBySessionId,
+            ...(state.activeSessionId === sessionId ? { userInput: "", selectedFiles: [], attachments: [] } : {}),
+          } as Partial<AppStore>);
+        },
+        resetStore: () => {
+          if (initialStoreSnapshot) {
+            set({ ...initialStoreSnapshot } as AppStore);
+          }
+        },
+      };
+    },
     { 
       name: "hermes-workbench",
       merge: (persistedState, currentState) => ({
@@ -211,6 +286,9 @@ const useAppStoreBase = create<AppStore>()(
         pendingTasksBySessionId: {},
         contextBundle: undefined,
         sessionAgentInsight: undefined,
+        sessionDrafts: {},
+        selectedFilesBySessionId: {},
+        attachmentsBySessionId: {},
       }),
     }
   )

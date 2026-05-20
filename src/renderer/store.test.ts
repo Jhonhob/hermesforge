@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAppStore } from "./store";
-import type { SessionMessage, StreamEvent, TaskEventEnvelope } from "../shared/types";
+import type { SessionAttachment, SessionMessage, StreamEvent, TaskEventEnvelope } from "../shared/types";
 
 function reset() {
   useAppStore.getState().resetStore();
@@ -26,6 +26,50 @@ describe("renderer store task projections", () => {
     useAppStore.getState().setAgentPanelWidth(420);
     expect(useAppStore.getState().sessionSidebarWidth).toBe(280);
     expect(useAppStore.getState().agentPanelWidth).toBe(420);
+  });
+
+  it("saves and restores draft, selected files and attachments per session", () => {
+    const attachment: SessionAttachment = {
+      id: "attachment-1",
+      name: "spec.md",
+      path: "D:/demo/spec.md",
+      originalPath: "D:/demo/spec.md",
+      kind: "file",
+      size: 120,
+      mimeType: "text/markdown",
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    useAppStore.setState({
+      activeSessionId: "session-a",
+      userInput: "A 的草稿",
+      selectedFiles: ["D:/demo/a.ts"],
+      attachments: [attachment],
+    });
+    useAppStore.getState().saveSessionEphemeralState("session-a");
+    useAppStore.setState({
+      activeSessionId: "session-b",
+      userInput: "B 的草稿",
+      selectedFiles: ["D:/demo/b.ts"],
+      attachments: [],
+    });
+    useAppStore.getState().saveSessionEphemeralState("session-b");
+
+    useAppStore.setState({ activeSessionId: "session-a" });
+    useAppStore.getState().restoreSessionEphemeralState("session-a");
+    expect(useAppStore.getState().userInput).toBe("A 的草稿");
+    expect(useAppStore.getState().selectedFiles).toEqual(["D:/demo/a.ts"]);
+    expect(useAppStore.getState().attachments).toEqual([attachment]);
+
+    useAppStore.getState().setSessionEphemeralState("session-a", { userInput: "", attachments: [] });
+    expect(useAppStore.getState().userInput).toBe("");
+    expect(useAppStore.getState().selectedFiles).toEqual(["D:/demo/a.ts"]);
+    expect(useAppStore.getState().attachments).toEqual([]);
+
+    useAppStore.setState({ activeSessionId: "session-b" });
+    useAppStore.getState().restoreSessionEphemeralState("session-b");
+    expect(useAppStore.getState().userInput).toBe("B 的草稿");
+    expect(useAppStore.getState().selectedFiles).toEqual(["D:/demo/b.ts"]);
   });
 
   it("clears pending clarify cards without touching approvals or toasts", () => {
@@ -517,6 +561,51 @@ describe("renderer store task projections", () => {
 
     const projection = useAppStore.getState().taskRunProjectionsById["task-interrupted"];
     expect(projection.status).toBe("interrupted");
+  });
+
+  it("keeps the active running task alive when rebuilding its session during navigation", () => {
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-live",
+      taskRunId: "task-live",
+      userInput: "继续思考这个问题",
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    useAppStore.getState().applyTaskEvent({
+      taskRunId: "task-live",
+      workSessionId: "session-live",
+      sessionId: "task-live",
+      engineId: "hermes",
+      event: {
+        type: "lifecycle",
+        stage: "running",
+        message: "Hermes 已接手任务。",
+        at: "2026-05-20T12:00:01.000Z",
+      },
+    });
+
+    useAppStore.getState().setActiveSession("session-other");
+    useAppStore.getState().setActiveSession("session-live");
+    useAppStore.getState().rebuildSessionProjections("session-live", [
+      {
+        taskRunId: "task-live",
+        workSessionId: "session-live",
+        sessionId: "task-live",
+        engineId: "hermes",
+        event: {
+          type: "lifecycle",
+          stage: "running",
+          message: "Hermes 已接手任务。",
+          at: "2026-05-20T12:00:01.000Z",
+        },
+      },
+    ]);
+
+    const state = useAppStore.getState();
+    const projection = state.taskRunProjectionsById["task-live"];
+    expect(state.runningTaskRunId).toBe("task-live");
+    expect(projection.status).toBe("running");
+    expect(projection.assistantMessage.status).toBe("streaming");
   });
 
   it("does not let an unrelated live result overwrite the newest task run", () => {

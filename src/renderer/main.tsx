@@ -37,6 +37,7 @@ import { buildConversationHistory } from "./conversationHistory";
 import { usePermissionOverview } from "./hooks/usePermissionOverview";
 import { markPerf, markPerfEnd, markPerfStart } from "./perf";
 import { targetSessionForTaskEvent } from "./session-routing";
+import { resolveRunningTaskState, runningSessionLabel } from "./sessionRunState";
 import { useAppStore, type RecentWorkspace } from "./store";
 import { safePromiseWithFallback } from "./utils/safePromise";
 import { hasInlineLocalFilePath } from "../shared/local-file-paths";
@@ -1249,12 +1250,13 @@ function App() {
       if (!session) return;
     }
     
+    if (current.activeSessionId && current.sessions.some((item) => item.id === current.activeSessionId)) {
+      store.saveSessionEphemeralState(current.activeSessionId);
+    }
     store.setActiveSession(session.id);
     store.setSessionFilesPath(session.sessionFilesPath);
     store.setWorkspacePath(session.workspacePath ?? "");
-    store.clearPendingClarifyCards();
-    store.clearSelectedFiles();
-    store.clearAttachments();
+    store.restoreSessionEphemeralState(session.id);
     store.setSessionAgentInsight(undefined);
     const requestId = ++sessionLoadSeq.current;
     await loadSelectedSessionData(session, requestId);
@@ -1335,6 +1337,7 @@ function App() {
     const remaining = useAppStore.getState().sessions.filter((item) => item.id !== result.deletedId);
     store.setSessions(remaining);
     store.clearSessionData(session.id);
+    store.clearSessionEphemeralState(session.id);
     if (deletedWasActive) {
       store.setSessionAgentInsight(undefined);
     }
@@ -1372,8 +1375,8 @@ function App() {
     const result = await window.workbenchClient.clearSessionFiles(current.activeSessionId);
     store.upsertSession(result.session);
     store.clearSessionData(current.activeSessionId);
+    store.clearSessionEphemeralState(current.activeSessionId);
     store.setSessionAgentInsight(undefined);
-    store.clearAttachments();
   }
 
   async function pickWorkspace() {
@@ -1388,6 +1391,7 @@ function App() {
     store.rememberWorkspace(workspacePath);
     store.clearSelectedFiles();
     store.clearAttachments();
+    store.saveSessionEphemeralState(current.activeSessionId);
     store.setWorkspaceDrawerOpen(false);
     writeRecentWorkspaces(useAppStore.getState().recentWorkspaces);
     if (current.activeSessionId) {
@@ -1459,6 +1463,16 @@ function App() {
       });
       return;
     }
+    const running = resolveRunningTaskState(current);
+    if (running.isAnyTaskRunning) {
+      store.warning(
+        "任务运行中",
+        running.isActiveSessionRunning
+          ? "当前会话任务还在运行，完成或停止后再发送。"
+          : `${runningSessionLabel(running)}正在运行，完成后再发送。`,
+      );
+      return;
+    }
 
     let activeSessionId = current.activeSessionId;
     let sessionFilesPath = current.sessionFilesPath;
@@ -1485,6 +1499,11 @@ function App() {
 
     const taskType = current.workspacePath.trim() ? inferTaskType(prompt, current.taskType) : "custom";
     const workSessionId = activeSessionId || "local-session";
+    if (!current.workspacePath.trim() && promptNeedsWorkspace(prompt, current.selectedFiles)) {
+      store.warning("请先选择项目目录", "这类请求需要真实工作区，Forge 才能像原版 CLI 一样读取项目文件。");
+      store.setWorkspaceDrawerOpen(true);
+      return;
+    }
     const conversationHistory = buildConversationHistory({
       workSessionId,
       taskRunOrderBySession: current.taskRunOrderBySession,
@@ -1495,6 +1514,7 @@ function App() {
     store.beginTaskRun({ workSessionId, taskRunId: clientTaskId, userInput: prompt, createdAt });
     taskPerf.current.set(clientTaskId, { startedAt: performance.now() });
     store.setUserInput("");
+    store.setSessionEphemeralState(workSessionId, { userInput: "", selectedFiles: current.selectedFiles, attachments: current.attachments });
     let result;
     try {
       result = await window.workbenchClient.startTask({
@@ -1516,7 +1536,10 @@ function App() {
       const latest = useAppStore.getState();
       if (latest.runningTaskRunId === clientTaskId) store.setRunningTaskRunId(undefined);
       if (latest.runningSessionId === clientTaskId) store.setRunningSessionId(undefined);
-      if (!latest.userInput.trim()) store.setUserInput(prompt);
+      const shouldRestorePrompt = latest.activeSessionId !== workSessionId || !latest.userInput.trim();
+      if (shouldRestorePrompt) {
+        store.setSessionEphemeralState(workSessionId, { userInput: prompt, selectedFiles: current.selectedFiles, attachments: current.attachments });
+      }
       store.pushEvent({
         taskRunId: "preflight",
         workSessionId: activeSessionId,
@@ -1528,13 +1551,7 @@ function App() {
       openFixTarget(fixTargetForFailure(message, useAppStore.getState().setupSummary?.blocking[0]?.fixAction));
       return;
     }
-
-    if (!current.workspacePath.trim() && promptNeedsWorkspace(prompt, current.selectedFiles)) {
-      store.warning("请先选择项目目录", "这类请求需要真实工作区，Forge 才能像原版 CLI 一样读取项目文件。");
-      store.setWorkspaceDrawerOpen(true);
-      return;
-    }
-    store.clearAttachments();
+    store.setSessionEphemeralState(workSessionId, { userInput: "", selectedFiles: current.selectedFiles, attachments: [] });
     if (result.taskRunId !== clientTaskId) {
       const perfEntry = taskPerf.current.get(clientTaskId);
       if (perfEntry) {
@@ -1603,9 +1620,14 @@ function App() {
 
   async function cancelTask() {
     const current = useAppStore.getState();
-    if (!current.runningTaskRunId) return;
-    await window.workbenchClient.cancelTask(current.runningTaskRunId);
-    store.finalizeTaskRun(current.runningTaskRunId, { status: "cancelled", content: "Hermes 任务已取消。" });
+    const running = resolveRunningTaskState(current);
+    if (!running.globalRunningTaskRunId) return;
+    if (!running.activeSessionRunningTaskRunId) {
+      store.warning("任务在其他会话运行", `${runningSessionLabel(running)}正在运行，切回对应会话后再停止。`);
+      return;
+    }
+    await window.workbenchClient.cancelTask(running.activeSessionRunningTaskRunId);
+    store.finalizeTaskRun(running.activeSessionRunningTaskRunId, { status: "cancelled", content: "Hermes 任务已取消。" });
     store.setRunningSessionId(undefined);
     store.setRunningTaskRunId(undefined);
     await refreshWorkspaceSafety();

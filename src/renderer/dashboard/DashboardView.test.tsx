@@ -46,6 +46,7 @@ describe("DashboardView", () => {
   function renderView(overrides?: {
     onOpenFix?: (target: "model" | "hermes" | "health" | "diagnostics" | "workspace") => void;
     onDeleteSession?: (session: WorkSession) => void;
+    onCancelTask?: () => void;
   }) {
     const onDeleteSession = overrides?.onDeleteSession ?? vi.fn();
     const view = render(
@@ -60,7 +61,7 @@ describe("DashboardView", () => {
         onOpenSupport={vi.fn()}
         onClearSession={vi.fn()}
         onStartTask={vi.fn()}
-        onCancelTask={vi.fn()}
+        onCancelTask={overrides?.onCancelTask ?? vi.fn()}
         onRestoreSnapshot={vi.fn()}
         onRefreshFileTree={vi.fn()}
         onOpenFix={overrides?.onOpenFix}
@@ -888,6 +889,94 @@ describe("DashboardView", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onStartTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks sending without exposing stop when another session owns the running task", () => {
+    const onCancelTask = vi.fn();
+    useAppStore.setState({
+      sessions: [
+        ...useAppStore.getState().sessions,
+        {
+          id: "session-other",
+          title: "后台会话",
+          status: "running",
+          sessionFilesPath: "D:/temp/session-other",
+          workspacePath: "D:/workspace/demo",
+          workspaceStatus: "ready",
+          createdAt: "2026-05-20T10:00:00.000Z",
+          updatedAt: "2026-05-20T10:00:00.000Z",
+        },
+      ],
+      userInput: "当前会话的新问题",
+    });
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-other",
+      taskRunId: "task-other",
+      userInput: "后台会话任务",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+
+    renderView({ onCancelTask });
+
+    expect(screen.queryByRole("button", { name: "停止 Hermes" })).toBeNull();
+    const sendButton = screen.getByRole("button", { name: "发送" });
+    expect(sendButton).toBeDisabled();
+    expect(sendButton).toHaveAttribute("title", "后台会话正在运行，完成后再发送。");
+    expect(onCancelTask).not.toHaveBeenCalled();
+  });
+
+  it("shows pending approval and clarify cards only for the active session", () => {
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-1",
+      taskRunId: "task-active-card",
+      userInput: "当前会话审批",
+      createdAt: "2026-05-20T10:00:00.000Z",
+    });
+    useAppStore.getState().finalizeTaskRun("task-active-card", { status: "complete", content: "done" });
+    useAppStore.getState().beginTaskRun({
+      workSessionId: "session-other",
+      taskRunId: "task-foreign-card",
+      userInput: "其他会话审批",
+      createdAt: "2026-05-20T10:01:00.000Z",
+    });
+    useAppStore.getState().finalizeTaskRun("task-foreign-card", { status: "complete", content: "done" });
+    useAppStore.setState({
+      pendingApprovalCards: [
+        {
+          id: "approval-active",
+          taskRunId: "task-active-card",
+          title: "当前会话需要确认",
+          patternKey: "cmd:active",
+          scopeKey: "task-active-card",
+          actionKind: "command_run",
+          risk: "medium",
+          status: "pending",
+          createdAt: "2026-05-20T10:00:00.000Z",
+        },
+        {
+          id: "approval-foreign",
+          taskRunId: "task-foreign-card",
+          title: "其他会话需要确认",
+          patternKey: "cmd:foreign",
+          scopeKey: "task-foreign-card",
+          actionKind: "command_run",
+          risk: "medium",
+          status: "pending",
+          createdAt: "2026-05-20T10:01:00.000Z",
+        },
+      ],
+      pendingClarifyCards: [
+        { id: "clarify-active", sessionId: "session-1", question: "当前会话澄清问题", status: "pending", createdAt: "2026-05-20T10:00:00.000Z" },
+        { id: "clarify-foreign", sessionId: "session-other", question: "其他会话澄清问题", status: "pending", createdAt: "2026-05-20T10:01:00.000Z" },
+      ],
+    });
+
+    renderView();
+
+    expect(screen.getByText("当前会话需要确认")).toBeInTheDocument();
+    expect(screen.queryByText("其他会话需要确认")).toBeNull();
+    expect(screen.getByText("当前会话澄清问题")).toBeInTheDocument();
+    expect(screen.queryByText("其他会话澄清问题")).toBeNull();
   });
 
   it("shows interactive context details inside the composer", () => {

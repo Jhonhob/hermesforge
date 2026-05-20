@@ -6,10 +6,12 @@ import { useShallow } from "zustand/react/shallow";
 import type { EngineEvent, EngineUpdateStatus, ModelProfile, SessionAgentInsightUsage } from "../../shared/types";
 import { estimateTextTokens } from "../../shared/token-estimator";
 import { useAppStore } from "../store";
+import { resolveRunningTaskState } from "../sessionRunState";
 import { cn } from "./DashboardPrimitives";
 import { buildPreflightState, preflightChipsForUser, preflightDetailForUser, preflightSummaryForUser } from "./permissionModel";
 
 type FixTarget = "model" | "hermes" | "health" | "diagnostics" | "workspace";
+const STATE_CHANGING_LOCAL_COMMANDS = new Set(["/clear", "/compact", "/model", "/new", "/theme", "/usage", "/workspace"]);
 
 export function ChatInput(props: {
   onStartTask: () => void;
@@ -44,6 +46,7 @@ export function ChatInput(props: {
     selectedFiles: state.selectedFiles,
     sessionAgentInsight: state.sessionAgentInsight,
     sessionFilesPath: state.sessionFilesPath,
+    sessions: state.sessions,
     setRuntimeConfig: state.setRuntimeConfig,
     setUserInput: state.setUserInput,
     setWebUiOverview: state.setWebUiOverview,
@@ -81,6 +84,7 @@ export function ChatInput(props: {
     locked: props.locked,
     overview: store.permissionOverview,
   });
+  const running = resolveRunningTaskState(store);
   const permissions = store.runtimeConfig?.enginePermissions?.hermes;
   const permissionsLabel = permissions
     ? `读${permissions.workspaceRead === false ? "关" : "开"} 写${permissions.fileWrite === false ? "关" : "开"} 命令${permissions.commandRun === false ? "关" : "开"}`
@@ -368,7 +372,7 @@ export function ChatInput(props: {
       store.warning("拖拽上传不可用", "客户端未就绪，无法导入附件");
       return;
     }
-    if (store.runningTaskRunId) {
+    if (running.isActiveSessionRunning) {
       store.warning("任务运行中", "请等待当前 Hermes 任务结束后再添加附件");
       return;
     }
@@ -401,7 +405,7 @@ export function ChatInput(props: {
       store.warning("剪贴板图片不可用", "客户端未就绪，无法导入剪贴板图片");
       return;
     }
-    if (store.runningTaskRunId) {
+    if (running.isActiveSessionRunning) {
       store.warning("任务运行中", "请等待当前 Hermes 任务结束后再添加图片");
       return;
     }
@@ -432,20 +436,27 @@ export function ChatInput(props: {
       return;
     }
     try {
-      const nextConfig = {
-        ...store.runtimeConfig,
-        defaultModelProfileId: profileId,
+      if (!window.workbenchClient || typeof window.workbenchClient.setDefaultModel !== "function") {
+        throw new Error("模型切换接口未就绪");
+      }
+      const result = await window.workbenchClient.setDefaultModel(profileId);
+      if (!result.success) {
+        throw new Error(result.message || "无法同步默认模型");
+      }
+      const latestConfig = useAppStore.getState().runtimeConfig ?? store.runtimeConfig;
+      store.setRuntimeConfig({
+        ...latestConfig,
+        defaultModelProfileId: result.defaultModelId ?? profileId,
         modelRoleAssignments: {
-          ...(store.runtimeConfig.modelRoleAssignments ?? {}),
-          chat: profileId,
+          ...(latestConfig.modelRoleAssignments ?? {}),
+          chat: result.defaultModelId ?? profileId,
         },
-      };
-      const saved = await window.workbenchClient.saveRuntimeConfig(nextConfig);
-      store.setRuntimeConfig(saved);
-      store.success("模型已切换", `当前使用：${target.name ?? target.model}`);
+        modelProfiles: result.models ?? latestConfig.modelProfiles,
+      });
+      store.success("模型已切换", result.message || `当前使用：${target.name ?? target.model}`);
       setModelMenuOpen(false);
     } catch (error) {
-      store.error("切换失败", error instanceof Error ? error.message : "无法保存模型配置");
+      store.error("切换失败", error instanceof Error ? error.message : "无法同步模型配置与 Gateway");
     }
   }
 
@@ -460,7 +471,7 @@ export function ChatInput(props: {
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = store.runningTaskRunId ? "none" : "copy";
+    event.dataTransfer.dropEffect = running.isActiveSessionRunning ? "none" : "copy";
     setIsDraggingAttachment(true);
   }
 
@@ -497,30 +508,40 @@ export function ChatInput(props: {
 
   async function dispatchSlashCommand(raw: string) {
     const [name, ...rest] = raw.split(/\s+/);
+    const normalizedName = name.toLowerCase();
     const arg = rest.join(" ").trim();
-    if (name === "/help") {
-      store.upsertClarifyCard({ id: "slash-help", question: "可用命令：/help /goal /clear /compact /model /workspace /new /usage /theme。主题可选：green-light、light、slate、oled、default-large", status: "pending", createdAt: new Date().toISOString() });
+    if (running.isAnyTaskRunning && STATE_CHANGING_LOCAL_COMMANDS.has(normalizedName)) {
+      store.warning(
+        "任务运行中",
+        running.isActiveSessionRunning
+          ? "当前会话还在思考，完成或停止后再执行这个命令。"
+          : "另一个会话还在思考，完成后再执行会改变会话或配置的命令。",
+      );
+      return;
+    }
+    if (normalizedName === "/help") {
+      store.upsertClarifyCard({ id: `slash-help-${store.activeSessionId ?? "local"}`, sessionId: store.activeSessionId, question: "可用命令：/help /goal /clear /compact /model /workspace /new /usage /theme。主题可选：green-light、light、slate、oled、default-large", status: "pending", createdAt: new Date().toISOString() });
       store.setUserInput("");
       return;
     }
-    if (name === "/clear") {
+    if (normalizedName === "/clear") {
       props.onClearSession?.();
       store.setUserInput("");
       return;
     }
-    if (name === "/new") {
+    if (normalizedName === "/new") {
       props.onCreateSession?.();
       store.setUserInput("");
       return;
     }
-    if (name === "/usage") {
+    if (normalizedName === "/usage") {
       void window.workbenchClient.saveWebUiSettings({ showUsage: !store.webUiOverview?.settings.showUsage }).then((settings) => {
         store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings } : undefined);
       });
       store.setUserInput("");
       return;
     }
-    if (name === "/theme") {
+    if (normalizedName === "/theme") {
       const theme = (["green-light", "light", "slate", "oled", "default-large"].includes(arg) ? arg : "green-light") as "green-light" | "light" | "slate" | "oled" | "default-large";
       const settings = await window.workbenchClient.saveWebUiSettings({ theme });
       store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings } : {
@@ -536,14 +557,14 @@ export function ChatInput(props: {
       store.setUserInput("");
       return;
     }
-    if (name === "/workspace") {
+    if (normalizedName === "/workspace") {
       const match = store.webUiOverview?.spaces.find((space) => space.name === arg || space.path === arg);
       if (match) store.setWorkspacePath(match.path);
       else props.onPickWorkspace?.();
       store.setUserInput("");
       return;
     }
-    if (name === "/model") {
+    if (normalizedName === "/model") {
       if (!arg) {
         props.onOpenFix?.("model");
         store.info("模型设置入口已打开", "请在模型提供商里测试并保存默认模型。");
@@ -555,25 +576,7 @@ export function ChatInput(props: {
         (profile) => profile.id.toLowerCase() === arg.toLowerCase() || (profile.name ?? profile.id).toLowerCase() === arg.toLowerCase(),
       );
       if (matchedProfile) {
-        if (!store.runtimeConfig) {
-          store.error("配置错误", "运行时配置未加载");
-          store.setUserInput("");
-          return;
-        }
-        const updatedConfig = {
-          ...store.runtimeConfig,
-          defaultModelProfileId: matchedProfile.id,
-          modelRoleAssignments: {
-            ...(store.runtimeConfig.modelRoleAssignments ?? {}),
-            chat: matchedProfile.id,
-          },
-        };
-        void window.workbenchClient.saveRuntimeConfig(updatedConfig).then((config) => {
-          store.setRuntimeConfig(config);
-          store.success("模型已切换", `当前使用：${matchedProfile.name ?? matchedProfile.id}`);
-        }).catch(() => {
-          store.error("切换失败", "无法保存模型配置");
-        });
+        await switchDefaultModel(matchedProfile.id);
       } else {
         const availableModels = profiles.map((profile) => profile.name ?? profile.id).join(", ");
         store.warning("模型不存在", `未找到模型 "${arg}"。可用模型：${availableModels || "无"}`);
@@ -581,14 +584,18 @@ export function ChatInput(props: {
       store.setUserInput("");
       return;
     }
-    if (name === "/goal") {
+    if (normalizedName === "/goal") {
       if (!arg) {
         store.setUserInput("/goal ");
       }
       return;
     }
-    if (name === "/compact") {
-      const sessionMessages = store.conversationMessages.filter((message) => message.sessionId === store.activeSessionId);
+    if (normalizedName === "/compact") {
+      const sessionMessages = compactableMessagesFromProjections(
+        store.activeSessionId,
+        store.taskRunProjectionsById,
+        store.taskRunOrderBySession,
+      );
       if (sessionMessages.length <= 2) {
         store.info("无需压缩", "当前会话消息较少，无需压缩。");
         store.setUserInput("");
@@ -605,7 +612,7 @@ export function ChatInput(props: {
         visibleInChat: true,
       });
       store.setUserInput(arg ? `请基于压缩后的上下文继续，重点关注：${arg}` : "请基于压缩后的上下文继续对话。");
-      store.success("上下文已压缩", `保留了 ${sessionMessages.length} 条消息的关键信息`);
+      store.success("上下文已压缩", `保留了 ${sessionMessages.length} 条投影消息的关键信息`);
       return;
     }
     store.warning("未知命令", `未知命令：${name}`);
@@ -674,8 +681,8 @@ export function ChatInput(props: {
           {isDraggingAttachment ? (
             <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center rounded-[28px] bg-slate-50/90">
               <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-3 text-center shadow-sm">
-                <p className="text-sm font-semibold text-slate-800">{store.runningTaskRunId ? "当前任务运行中" : "松开即可添加附件"}</p>
-                <p className="mt-1 text-xs text-slate-500">{store.runningTaskRunId ? "请等 Hermes 完成后再上传文件" : "支持图片和常见文档，最多一次 12 个"}</p>
+                <p className="text-sm font-semibold text-slate-800">{running.isActiveSessionRunning ? "当前任务运行中" : "松开即可添加附件"}</p>
+                <p className="mt-1 text-xs text-slate-500">{running.isActiveSessionRunning ? "请等 Hermes 完成后再上传文件" : "支持图片和常见文档，最多一次 12 个"}</p>
               </div>
             </div>
           ) : null}
@@ -737,7 +744,7 @@ export function ChatInput(props: {
 
                 {plusMenuOpen ? (
                   <div className="hermes-input-menu absolute bottom-[calc(100%+10px)] left-0 z-20 w-56 overflow-hidden rounded-2xl border border-[var(--hermes-card-border)] bg-white p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.12)]">
-                    <MenuItem icon={Paperclip} label={isImportingAttachment ? "正在导入附件" : "附件"} onClick={() => void pickAttachments()} disabled={Boolean(store.runningTaskRunId) || isImportingAttachment} />
+                    <MenuItem icon={Paperclip} label={isImportingAttachment ? "正在导入附件" : "附件"} onClick={() => void pickAttachments()} disabled={running.isActiveSessionRunning || isImportingAttachment} />
                     <MenuItem icon={isListening ? MicOff : Mic} label={isListening ? "停止语音输入" : "语音输入"} onClick={() => void toggleVoiceInput()} />
                     <MenuItem icon={Plus} label="@ 提及" onClick={() => fillInput("@Hermes ")} />
                     <MenuItem icon={Command} label="插入命令" onClick={() => fillInput("/")} />
@@ -751,7 +758,7 @@ export function ChatInput(props: {
                 aria-label="添加附件"
                 title="添加附件"
                 type="button"
-                disabled={Boolean(store.runningTaskRunId) || isImportingAttachment}
+                disabled={running.isActiveSessionRunning || isImportingAttachment}
               >
                 <Paperclip size={16} />
               </button>
@@ -820,7 +827,7 @@ export function ChatInput(props: {
                 statusTone={statusTone}
               />
               <ContextMeterPill meter={contextMeter} />
-              {store.runningTaskRunId ? (
+              {running.isActiveSessionRunning ? (
                 <button
                   className="grid h-8 w-8 place-items-center rounded-full border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100"
                   onClick={props.onCancelTask}
@@ -1395,6 +1402,29 @@ function contextTextFromMessages(
     .filter((message) => !activeSessionId || message.sessionId === activeSessionId)
     .map((message) => message.content)
     .join("\n");
+}
+
+function compactableMessagesFromProjections(
+  activeSessionId: string | undefined,
+  projections: ReturnType<typeof useAppStore.getState>["taskRunProjectionsById"],
+  runOrder: ReturnType<typeof useAppStore.getState>["taskRunOrderBySession"],
+) {
+  const orderedRuns = activeSessionId && runOrder[activeSessionId]?.length
+    ? runOrder[activeSessionId].map((id) => projections[id])
+    : Object.values(projections).filter((projection) => !activeSessionId || projection.workSessionId === activeSessionId);
+  return orderedRuns
+    .filter((run): run is NonNullable<typeof run> => Boolean(run) && (!activeSessionId || run.workSessionId === activeSessionId))
+    .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+    .flatMap((run) => {
+      const messages: Array<{ role: string; content: string }> = [];
+      if (run.userMessage?.content.trim()) {
+        messages.push({ role: "user", content: run.userMessage.content.trim() });
+      }
+      if (run.assistantMessage.content.trim()) {
+        messages.push({ role: "agent", content: run.assistantMessage.content.trim() });
+      }
+      return messages;
+    });
 }
 
 function estimateTokens(text: string) {

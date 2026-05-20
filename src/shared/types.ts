@@ -804,6 +804,8 @@ export type ApprovalRequest = {
 
 export type ClarifyRequest = {
   id: string;
+  sessionId?: string;
+  taskRunId?: string;
   question: string;
   options?: string[];
   status: "pending" | "answered" | "dismissed";

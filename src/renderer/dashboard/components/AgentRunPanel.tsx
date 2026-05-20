@@ -342,8 +342,9 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
 }
 
 function resolveActiveRun(store: Pick<ReturnType<typeof useAppStore.getState>, "activeSessionId" | "runningTaskRunId" | "taskRunOrderBySession" | "taskRunProjectionsById">): TaskRunProjection | undefined {
-  if (store.runningTaskRunId && store.taskRunProjectionsById[store.runningTaskRunId]) {
-    return store.taskRunProjectionsById[store.runningTaskRunId];
+  const runningRun = store.runningTaskRunId ? store.taskRunProjectionsById[store.runningTaskRunId] : undefined;
+  if (runningRun && (!store.activeSessionId || runningRun.workSessionId === store.activeSessionId)) {
+    return runningRun;
   }
   const order = store.activeSessionId ? store.taskRunOrderBySession[store.activeSessionId] ?? [] : [];
   const latestId = order.at(-1);

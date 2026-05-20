@@ -2,7 +2,7 @@ import { AlertCircle, Brain, ChevronDown, Copy, Ellipsis, FileDown, Loader2, Ref
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { EngineEvent, TaskEventEnvelope, TaskRunProjection, ToolEvent } from "../../shared/types";
+import type { ApprovalRequest, ClarifyRequest, EngineEvent, TaskEventEnvelope, TaskRunProjection, ToolEvent } from "../../shared/types";
 import { StreamingMarkdown } from "../markdown/StreamingMarkdown";
 import { useAppStore } from "../store";
 import { ChatInput } from "./ChatInput";
@@ -170,8 +170,12 @@ export function PureChatContainer(props: {
 
 function PendingNativeCards() {
   const store = useAppStore(useShallow((state) => ({
+    activeSessionId: state.activeSessionId,
+    events: state.events,
     pendingApprovalCards: state.pendingApprovalCards,
     pendingClarifyCards: state.pendingClarifyCards,
+    taskEventsByRunId: state.taskEventsByRunId,
+    taskRunProjectionsById: state.taskRunProjectionsById,
     lastWebUiError: state.lastWebUiError,
     setLastWebUiError: state.setLastWebUiError,
     resolveApprovalCard: state.resolveApprovalCard,
@@ -179,8 +183,18 @@ function PendingNativeCards() {
     setUserInput: state.setUserInput,
     error: state.error,
   })));
-  const approvals = useMemo(() => store.pendingApprovalCards.filter((card) => card.status === "pending"), [store.pendingApprovalCards]);
-  const clarifies = useMemo(() => store.pendingClarifyCards.filter((card) => card.status === "pending"), [store.pendingClarifyCards]);
+  const approvals = useMemo(
+    () => store.pendingApprovalCards
+      .filter((card) => card.status === "pending")
+      .filter((card) => approvalBelongsToSession(card, store)),
+    [store],
+  );
+  const clarifies = useMemo(
+    () => store.pendingClarifyCards
+      .filter((card) => card.status === "pending")
+      .filter((card) => clarifyBelongsToSession(card, store.activeSessionId)),
+    [store],
+  );
   if (!approvals.length && !clarifies.length && !store.lastWebUiError) return null;
 
   return (
@@ -370,6 +384,24 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
       )}
     />
   );
+}
+
+function approvalBelongsToSession(
+  card: ApprovalRequest,
+  store: Pick<ReturnType<typeof useAppStore.getState>, "activeSessionId" | "events" | "taskEventsByRunId" | "taskRunProjectionsById">,
+) {
+  if (!store.activeSessionId) return true;
+  const projection = store.taskRunProjectionsById[card.taskRunId];
+  if (projection) return projection.workSessionId === store.activeSessionId;
+  const knownEvents = store.taskEventsByRunId[card.taskRunId] ?? store.events.filter((event) => event.taskRunId === card.taskRunId);
+  if (!knownEvents.length) return false;
+  return knownEvents.some((event) => event.workSessionId === store.activeSessionId);
+}
+
+function clarifyBelongsToSession(card: ClarifyRequest, activeSessionId?: string) {
+  if (!activeSessionId) return true;
+  if (!card.sessionId && !card.taskRunId) return true;
+  return card.sessionId === activeSessionId;
 }
 
 function LongReplyExportHint(props: { run: TaskRunProjection }) {

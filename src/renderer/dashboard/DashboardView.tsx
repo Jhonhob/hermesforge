@@ -12,6 +12,7 @@ import { WorkspaceDrawer } from "./components/WorkspaceDrawer";
 import { ControlCenter } from "./components/ControlCenter";
 import { AgentRunPanel } from "./components/AgentRunPanel";
 import { hasInlineLocalFilePath } from "../../shared/local-file-paths";
+import { resolveRunningTaskState, runningSessionLabel } from "../sessionRunState";
 
 type PanelId = ReturnType<typeof useAppStore.getState>["activePanel"];
 type FixTarget = "model" | "hermes" | "health" | "diagnostics" | "workspace";
@@ -353,8 +354,10 @@ function clampPanelWidth(width: number, panel: ResizablePanel, otherPanelWidth: 
   return Math.round(Math.min(Math.max(width, min), max, responsiveMax));
 }
 
-function computeSendBlock(store: Pick<ReturnType<typeof useAppStore.getState>, "attachments" | "hermesStatus" | "runtimeConfig" | "runningTaskRunId" | "selectedFiles" | "setupSummary" | "taskType" | "userInput" | "workspacePath">): { message: string; target?: FixTarget } | undefined {
-  if (store.runningTaskRunId) return { message: "当前任务运行中，完成或停止后再发送。" };
+function computeSendBlock(store: Pick<ReturnType<typeof useAppStore.getState>, "activeSessionId" | "attachments" | "hermesStatus" | "runtimeConfig" | "runningTaskRunId" | "selectedFiles" | "sessions" | "setupSummary" | "taskRunProjectionsById" | "taskType" | "userInput" | "workspacePath">): { message: string; target?: FixTarget } | undefined {
+  const running = resolveRunningTaskState(store);
+  if (running.isActiveSessionRunning) return { message: "当前会话任务运行中，完成或停止后再发送。" };
+  if (running.isAnotherSessionRunning) return { message: `${runningSessionLabel(running)}正在运行，完成后再发送。` };
   if (!store.userInput.trim() && store.attachments.length === 0) return { message: "写一句需求或添加附件后就能发送。" };
   if (!store.workspacePath.trim() && promptNeedsWorkspace(store.userInput, store.selectedFiles)) {
     return { message: "这类请求需要先选择项目目录，否则 Forge 无法像原版 CLI 那样在真实工作区读取文件。", target: "workspace" };

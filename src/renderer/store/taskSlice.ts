@@ -607,9 +607,16 @@ export const taskSlice = combine<TaskState, TaskActions>(
           if (!order.includes(taskRunId)) order.push(taskRunId);
         }
 
+        const liveTaskRunIds = new Set(
+          [state.runningTaskRunId, state.runningSessionId].filter((taskRunId): taskRunId is string => Boolean(taskRunId)),
+        );
+
         for (const taskRunId of order) {
           const projection = projections[taskRunId];
-          if (projection.status === "running" || projection.status === "routing" || projection.status === "streaming") {
+          if (
+            !liveTaskRunIds.has(taskRunId)
+            && (projection.status === "running" || projection.status === "routing" || projection.status === "streaming")
+          ) {
             projections[taskRunId] = {
               ...projection,
               status: "interrupted",
