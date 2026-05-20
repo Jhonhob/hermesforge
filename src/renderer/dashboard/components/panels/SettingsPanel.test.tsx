@@ -8,6 +8,7 @@ const getConfigOverview = vi.fn();
 const checkUpdates = vi.fn();
 const updateHermesConfig = vi.fn();
 const installHermes = vi.fn();
+const saveWebUiSettings = vi.fn();
 let installEventHandler: ((event: HermesInstallEvent) => void) | undefined;
 
 const runtimeConfig: RuntimeConfig = {
@@ -26,7 +27,24 @@ beforeEach(() => {
   checkUpdates.mockReset();
   updateHermesConfig.mockReset();
   installHermes.mockReset();
+  saveWebUiSettings.mockReset();
   installEventHandler = undefined;
+  useAppStore.setState({
+    webUiOverview: {
+      settings: { theme: "green-light", language: "zh", sendKey: "enter", sendKeyHintDismissed: false, showUsage: false, showCliSessions: true },
+      projects: [],
+      spaces: [],
+      skills: [],
+      memory: [],
+      crons: [],
+      profiles: [],
+      slashCommands: [],
+    },
+  });
+  saveWebUiSettings.mockImplementation(async (input) => ({
+    ...useAppStore.getState().webUiOverview!.settings,
+    ...input,
+  }));
   Object.assign(window, {
     workbenchClient: {
       getConfigOverview,
@@ -44,6 +62,7 @@ beforeEach(() => {
       importExistingHermesConfig: vi.fn(),
       updateHermes: vi.fn(),
       testHermesWindowsBridge: vi.fn(),
+      saveWebUiSettings,
     },
   });
   getConfigOverview.mockResolvedValue({
@@ -103,6 +122,23 @@ describe("SettingsPanel Hermes installation", () => {
     await waitFor(() => {
       expect(installHermes).toHaveBeenLastCalledWith({ source: { kind: "mirror" } });
     });
+  });
+
+  it("saves workbench preferences from the settings center", async () => {
+    renderSettingsPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ctrl+Enter 发送" }));
+
+    await waitFor(() => expect(saveWebUiSettings).toHaveBeenCalledWith({
+      sendKey: "mod-enter",
+      sendKeyHintDismissed: true,
+    }));
+    expect(useAppStore.getState().webUiOverview?.settings.sendKey).toBe("mod-enter");
+
+    fireEvent.click(screen.getByRole("switch", { name: "显示 Token 用量" }));
+
+    await waitFor(() => expect(saveWebUiSettings).toHaveBeenCalledWith({ showUsage: true }));
+    expect(useAppStore.getState().webUiOverview?.settings.showUsage).toBe(true);
   });
 });
 

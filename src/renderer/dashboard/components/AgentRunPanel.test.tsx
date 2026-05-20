@@ -4,7 +4,7 @@ import { AgentRunPanel } from "./AgentRunPanel";
 import { useAppStore } from "../../store";
 import type { RuntimeConfig } from "../../../shared/types";
 
-const defaultSettings = { theme: "green-light" as const, language: "zh" as const, sendKey: "enter" as const, showUsage: false, showCliSessions: true };
+const defaultSettings = { theme: "green-light" as const, language: "zh" as const, sendKey: "enter" as const, sendKeyHintDismissed: true, showUsage: false, showCliSessions: true };
 const defaultRuntimeConfig: RuntimeConfig = {
   defaultModelProfileId: "default-model",
   modelProfiles: [{ id: "default-model", provider: "custom", model: "gpt-5.4", baseUrl: "http://127.0.0.1:1234/v1", temperature: 0.6, maxTokens: 128000 }],
@@ -27,7 +27,10 @@ describe("AgentRunPanel", () => {
     useAppStore.getState().resetStore();
     saveWebUiSettings.mockReset();
     saveRuntimeConfig.mockReset();
-    saveWebUiSettings.mockImplementation(async (input: Partial<typeof defaultSettings>) => ({ ...defaultSettings, ...input }));
+    saveWebUiSettings.mockImplementation(async (input: Partial<typeof defaultSettings>) => ({
+      ...(useAppStore.getState().webUiOverview?.settings ?? defaultSettings),
+      ...input,
+    }));
     saveRuntimeConfig.mockImplementation(async (config: RuntimeConfig) => config);
     Object.defineProperty(window, "workbenchClient", {
       configurable: true,
@@ -299,6 +302,11 @@ describe("AgentRunPanel", () => {
 
   it("saves quick settings through existing APIs", async () => {
     render(<AgentRunPanel open />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ctrl+Enter 发送" }));
+
+    await waitFor(() => expect(saveWebUiSettings).toHaveBeenCalledWith({ sendKey: "mod-enter", sendKeyHintDismissed: true }));
+    expect(useAppStore.getState().webUiOverview?.settings.sendKey).toBe("mod-enter");
 
     fireEvent.click(screen.getByRole("button", { name: "显示 Token 用量" }));
 

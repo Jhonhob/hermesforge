@@ -63,7 +63,7 @@ describe("ProfilesPanel", () => {
 
 function overview(profiles: HermesWebUiOverview["profiles"]): HermesWebUiOverview {
   return {
-    settings: { theme: "green-light", language: "zh", sendKey: "enter", showUsage: false, showCliSessions: true },
+    settings: { theme: "green-light", language: "zh", sendKey: "enter", sendKeyHintDismissed: true, showUsage: false, showCliSessions: true },
     projects: [],
     spaces: [],
     skills: [],

@@ -8,7 +8,7 @@ describe("TasksPanel", () => {
     useAppStore.getState().resetStore();
     window.workbenchClient = {
       getWebUiOverview: vi.fn(async () => ({
-        settings: { theme: "green-light", language: "zh", sendKey: "enter", showUsage: false, showCliSessions: true },
+        settings: { theme: "green-light", language: "zh", sendKey: "enter", sendKeyHintDismissed: true, showUsage: false, showCliSessions: true },
         projects: [],
         spaces: [],
         skills: [],

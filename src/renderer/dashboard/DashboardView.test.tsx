@@ -31,7 +31,7 @@ describe("DashboardView", () => {
         updateSources: {},
       },
       webUiOverview: {
-        settings: { theme: "green-light", language: "zh", sendKey: "enter", showUsage: false, showCliSessions: true },
+        settings: { theme: "green-light", language: "zh", sendKey: "enter", sendKeyHintDismissed: true, showUsage: false, showCliSessions: true },
         projects: [{ id: "project-1", name: "项目 A", color: "#10b981", createdAt: "2026-04-18T10:00:00.000Z", updatedAt: "2026-04-18T10:00:00.000Z" }],
         spaces: [],
         skills: [],

@@ -18,7 +18,7 @@ import {
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { EngineEvent, ModelProfile, PermissionOverview, RuntimeConfig, SessionAgentInsightUsage, TaskEventEnvelope, TaskRunProjection } from "../../../shared/types";
+import type { EngineEvent, HermesWebUiSettings, ModelProfile, PermissionOverview, RuntimeConfig, SessionAgentInsightUsage, TaskEventEnvelope, TaskRunProjection } from "../../../shared/types";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
 import {
@@ -95,17 +95,34 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
   const permissions = store.runtimeConfig?.enginePermissions?.hermes;
   const runStatus = activeRun ? runStatusLabel(activeRun.status) : runStatusLabel(insight?.latestRuntime?.status);
 
-  async function updateWebUiSetting(key: "showUsage" | "showCliSessions", value: boolean) {
-    setSavingKey(key);
+  async function saveWebUiSetting(input: Partial<HermesWebUiSettings>, savingKeyValue: string, successMessage: string) {
+    setSavingKey(savingKeyValue);
     try {
-      const nextSettings = await window.workbenchClient.saveWebUiSettings({ [key]: value });
+      const nextSettings = await window.workbenchClient.saveWebUiSettings(input);
       store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings: nextSettings } : undefined);
-      store.success("设置已保存", key === "showUsage" ? "Token 用量显示已更新。" : "CLI 会话显示已更新。");
+      store.success("设置已保存", successMessage);
     } catch (error) {
       store.error("设置保存失败", error instanceof Error ? error.message : "无法保存 Web UI 设置。");
     } finally {
       setSavingKey(undefined);
     }
+  }
+
+  async function updateWebUiSetting(key: "showUsage" | "showCliSessions", value: boolean) {
+    await saveWebUiSetting(
+      { [key]: value },
+      key,
+      key === "showUsage" ? "Token 用量显示已更新。" : "CLI 会话显示已更新。",
+    );
+  }
+
+  async function updateSendKey(sendKey: HermesWebUiSettings["sendKey"]) {
+    if ((settings?.sendKey ?? "enter") === sendKey) return;
+    await saveWebUiSetting(
+      { sendKey, sendKeyHintDismissed: true },
+      "sendKey",
+      sendKey === "enter" ? "已切换为 Enter 发送。" : "已切换为 Ctrl+Enter 发送。",
+    );
   }
 
   async function updateHermesPermission(key: "commandRun" | "fileWrite", value: boolean) {
@@ -288,6 +305,11 @@ export function AgentRunPanel(props: { open?: boolean; onClose?: () => void; onO
 
         <PanelCard title="快捷设置">
           <div className="space-y-3">
+            <SendKeySegment
+              value={settings?.sendKey ?? "enter"}
+              saving={savingKey === "sendKey"}
+              onChange={(value) => void updateSendKey(value)}
+            />
             <SettingToggle
               label="显示 Token 用量"
               active={settings?.showUsage !== false}
@@ -681,6 +703,38 @@ function EventDetailList(props: { events: TaskEventEnvelope[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function SendKeySegment(props: { value: HermesWebUiSettings["sendKey"]; saving: boolean; onChange: (value: HermesWebUiSettings["sendKey"]) => void }) {
+  return (
+    <div className="text-[13px]">
+      <span className="inline-flex min-w-0 items-center gap-2 font-semibold text-slate-600">
+        <Settings2 size={14} className="shrink-0 text-slate-400" />
+        <span className="truncate">发送快捷键</span>
+        {props.saving ? <Loader2 size={12} className="animate-spin text-slate-400" /> : null}
+      </span>
+      <div className="mt-2 grid grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+        <SendKeyOption label="Enter 发送" active={props.value === "enter"} onClick={() => props.onChange("enter")} />
+        <SendKeyOption label="Ctrl+Enter 发送" active={props.value === "mod-enter"} onClick={() => props.onChange("mod-enter")} />
+      </div>
+    </div>
+  );
+}
+
+function SendKeyOption(props: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      className={cn(
+        "h-8 rounded-lg px-2 text-[12px] font-semibold transition",
+        props.active ? "bg-white text-[var(--hermes-primary)] shadow-sm ring-1 ring-[var(--hermes-primary-border)]" : "text-slate-500 hover:bg-white/70 hover:text-slate-700",
+      )}
+      aria-pressed={props.active}
+      onClick={props.onClick}
+      type="button"
+    >
+      {props.label}
+    </button>
   );
 }
 

@@ -33,7 +33,6 @@ import { ModelConfigWizard } from "./dashboard/components/panels/ModelConfigWiza
 import { SettingsPanel as HermesSettingsPanel } from "./dashboard/components/panels/SettingsPanel";
 import { InstallSourceDialog, type InstallSourceChoice } from "./dashboard/components/InstallSourceDialog";
 import { ConfigCenterLayout, type ConfigSectionId } from "./dashboard/components/settings/ConfigCenterLayout";
-import { ToggleSwitch } from "./dashboard/components/settings/ToggleSwitch";
 import { buildConversationHistory } from "./conversationHistory";
 import { usePermissionOverview } from "./hooks/usePermissionOverview";
 import { markPerf, markPerfEnd, markPerfStart } from "./perf";
@@ -79,6 +78,7 @@ type ConfigOverview = {
 };
 
 type FixTarget = "model" | "hermes" | "health" | "diagnostics" | "workspace";
+type StatusMetricTone = "ok" | "warning" | "danger" | "neutral";
 
 function defaultHermesRuntime(): HermesRuntimeConfig {
   return {
@@ -407,6 +407,10 @@ function SettingsView(props: {
     store.setView("home");
   }
 
+  const diagnosticsOverallMetric = diagnosticOverallStatus(oneClickDiagnostics, overview?.health);
+  const diagnosticsIssueMetric = diagnosticIssueStatus(oneClickDiagnostics, overview?.health);
+  const diagnosticsResolvedMetric = diagnosticResolvedStatus(oneClickDiagnostics, overview?.health);
+
   return (
     <ConfigCenterLayout
       activeSection={activeSection}
@@ -547,9 +551,9 @@ function SettingsView(props: {
             description="统一检查当前运行环境、Hermes、Gateway、模型和任务锁；低风险问题可一键修复并自动复查。"
           />
           <div className="grid gap-3 sm:grid-cols-3">
-            <StatusMetric label="整体状态" value={oneClickDiagnostics ? (oneClickDiagnostics.summary.failed ? "需处理" : oneClickDiagnostics.summary.warnings ? "有提醒" : "通过") : overview?.health?.ready ? "就绪" : "需处理"} tone={oneClickDiagnostics ? oneClickDiagnostics.summary.failed ? "danger" : oneClickDiagnostics.summary.warnings ? "warning" : "ok" : overview?.health?.ready ? "ok" : "danger"} />
-            <StatusMetric label="失败 / 警告" value={oneClickDiagnostics ? `${oneClickDiagnostics.summary.failed} / ${oneClickDiagnostics.summary.warnings}` : `${overview?.health?.blocking.length ?? 0} / 0`} tone={oneClickDiagnostics ? oneClickDiagnostics.summary.failed ? "danger" : oneClickDiagnostics.summary.warnings ? "warning" : "ok" : (overview?.health?.blocking.length ?? 0) > 0 ? "danger" : "ok"} />
-            <StatusMetric label="已修复 / 未解决" value={oneClickDiagnostics ? `${oneClickDiagnostics.summary.fixed} / ${oneClickDiagnostics.summary.unresolved}` : `0 / ${overview?.health?.blocking.length ?? 0}`} tone={oneClickDiagnostics?.summary.unresolved ? "warning" : "neutral"} />
+            <StatusMetric label="整体状态" value={diagnosticsOverallMetric.value} tone={diagnosticsOverallMetric.tone} />
+            <StatusMetric label="失败 / 警告" value={diagnosticsIssueMetric.value} tone={diagnosticsIssueMetric.tone} />
+            <StatusMetric label="已修复 / 未解决" value={diagnosticsResolvedMetric.value} tone={diagnosticsResolvedMetric.tone} />
           </div>
           <SettingsPanelCard title="先修这些问题">
             {(overview?.health?.blocking.length ?? 0) > 0 ? (
@@ -654,14 +658,14 @@ function SettingsPanelCard(props: { title: string; children: React.ReactNode }) 
   );
 }
 
-function StatusMetric(props: { label: string; value: string; tone: "ok" | "warning" | "danger" | "neutral" }) {
+function StatusMetric(props: { label: string; value: string; tone: StatusMetricTone }) {
   const toneClass =
     props.tone === "ok"
       ? "border-emerald-100 bg-emerald-50 text-emerald-700"
       : props.tone === "warning"
-        ? "border-amber-100 bg-amber-50 text-amber-700"
+        ? "border-amber-100/90 bg-amber-50/70 text-amber-700"
         : props.tone === "danger"
-          ? "border-rose-100 bg-rose-50 text-rose-700"
+          ? "border-rose-100/80 bg-rose-50/50 text-rose-700"
           : "border-slate-200 bg-slate-50 text-slate-600";
   return (
     <div className={`rounded-xl border px-3 py-2 ${toneClass}`}>
@@ -669,6 +673,57 @@ function StatusMetric(props: { label: string; value: string; tone: "ok" | "warni
       <p className="mt-0.5 truncate text-base font-semibold">{props.value}</p>
     </div>
   );
+}
+
+function diagnosticOverallStatus(report: OneClickDiagnosticsReport | undefined, health: SetupSummary | undefined): { value: string; tone: StatusMetricTone } {
+  if (report) {
+    if (report.summary.failed > 0) return { value: "需关注", tone: "danger" };
+    if (report.summary.warnings > 0 || report.summary.unresolved > 0) return { value: "有提醒", tone: "warning" };
+    return { value: "通过", tone: "ok" };
+  }
+  const blockingCount = health?.blocking.length ?? 0;
+  const warningCount = setupWarningCount(health);
+  if (!health) return { value: "待读取", tone: "neutral" };
+  if (health.ready) return { value: "就绪", tone: "ok" };
+  if (blockingCount > 0) return { value: "需关注", tone: "warning" };
+  if (warningCount > 0) return { value: "有提醒", tone: "warning" };
+  return { value: "待检查", tone: "neutral" };
+}
+
+function diagnosticIssueStatus(report: OneClickDiagnosticsReport | undefined, health: SetupSummary | undefined): { value: string; tone: StatusMetricTone } {
+  if (report) {
+    const failed = report.summary.failed;
+    const warnings = report.summary.warnings;
+    return {
+      value: `${failed} / ${warnings}`,
+      tone: failed > 0 ? "danger" : warnings > 0 ? "warning" : "neutral",
+    };
+  }
+  const blockingCount = health?.blocking.length ?? 0;
+  const warningCount = setupWarningCount(health);
+  return {
+    value: `${blockingCount} / ${warningCount}`,
+    tone: blockingCount > 0 || warningCount > 0 ? "warning" : "neutral",
+  };
+}
+
+function diagnosticResolvedStatus(report: OneClickDiagnosticsReport | undefined, health: SetupSummary | undefined): { value: string; tone: StatusMetricTone } {
+  if (report) {
+    const fixed = report.summary.fixed;
+    const unresolved = report.summary.unresolved;
+    return {
+      value: `${fixed} / ${unresolved}`,
+      tone: unresolved > 0 ? "warning" : fixed > 0 ? "ok" : "neutral",
+    };
+  }
+  return {
+    value: `0 / ${health?.blocking.length ?? 0}`,
+    tone: (health?.blocking.length ?? 0) > 0 ? "warning" : "neutral",
+  };
+}
+
+function setupWarningCount(health: SetupSummary | undefined) {
+  return health?.checks.filter((check) => check.status === "warning").length ?? 0;
 }
 
 function SetupCheckCard(props: {
@@ -746,9 +801,9 @@ function OneClickDiagnosticsResultView(props: { report: OneClickDiagnosticsRepor
   return (
     <SettingsPanelCard title="一键诊断结果">
       <div className="space-y-2 text-[12px] text-slate-600">
-        <div className={`rounded-lg border px-3 py-2 ${props.report.summary.failed ? "border-rose-100 bg-rose-50 text-rose-800" : props.report.summary.warnings ? "border-amber-100 bg-amber-50 text-amber-800" : "border-emerald-100 bg-emerald-50 text-emerald-800"}`}>
+        <div className={`rounded-lg border px-3 py-2 ${props.report.summary.failed ? "border-rose-100/80 bg-rose-50/45 text-rose-700" : props.report.summary.warnings ? "border-amber-100/90 bg-amber-50/70 text-amber-800" : "border-emerald-100 bg-emerald-50 text-emerald-800"}`}>
           <p className="font-semibold">
-            {props.report.summary.failed ? "诊断完成，但仍有失败项。" : props.report.summary.warnings ? "诊断完成，有需要留意的提醒。" : "诊断通过。"}
+            {props.report.summary.failed ? "诊断完成，有项目需要关注。" : props.report.summary.warnings ? "诊断完成，有需要留意的提醒。" : "诊断通过。"}
           </p>
           <p className="mt-1 text-[11px] opacity-80">
             通过 {props.report.summary.passed}，警告 {props.report.summary.warnings}，失败 {props.report.summary.failed}，已修复 {props.report.summary.fixed}，未解决 {props.report.summary.unresolved}

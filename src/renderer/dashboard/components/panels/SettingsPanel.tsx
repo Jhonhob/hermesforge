@@ -17,6 +17,9 @@ import {
   XCircle,
   X,
   ExternalLink,
+  Gauge,
+  Keyboard,
+  Terminal,
 } from "lucide-react";
 import { useAppStore } from "../../../store";
 import type {
@@ -25,6 +28,7 @@ import type {
   HermesInstallEvent,
   HermesPermissionPolicyMode,
   HermesRuntimeConfig,
+  HermesWebUiSettings,
   HermesWindowsBridgeTestResult,
   PermissionOverview,
   PermissionOverviewBlockReason,
@@ -83,6 +87,7 @@ export function SettingsPanel(props: {
   const [updateStatus, setUpdateStatus] = useState<EngineUpdateStatus | undefined>();
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [lastInstallSourceKind, setLastInstallSourceKind] = useState<InstallSourceChoice | undefined>();
+  const [savingPreference, setSavingPreference] = useState<string | undefined>();
   const permissionOverview = usePermissionOverview({ autoLoad: false });
 
   useEffect(() => {
@@ -281,6 +286,19 @@ export function SettingsPanel(props: {
     }
   }
 
+  async function updateWorkbenchPreference(input: Partial<HermesWebUiSettings>, savingKeyValue: string, successMessage: string) {
+    setSavingPreference(savingKeyValue);
+    try {
+      const nextSettings = await window.workbenchClient.saveWebUiSettings(input);
+      store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings: nextSettings } : undefined);
+      store.success("设置已保存", successMessage);
+    } catch (error) {
+      store.error("设置保存失败", error instanceof Error ? error.message : "无法保存工作台偏好。");
+    } finally {
+      setSavingPreference(undefined);
+    }
+  }
+
   function handlePrimaryAction(action: HermesSetupAction) {
     if (action === "install" || action === "repair") {
       if (runtime.mode === "darwin") {
@@ -362,6 +380,7 @@ export function SettingsPanel(props: {
   const matrix = permissionOverview.data ? overviewMatrix(permissionOverview.data) : enforcementMatrix(effectiveRuntime(), bridge);
   const policyBlock = permissionOverview.data?.blockReason ?? policyBlockReason(effectiveRuntime());
   const bridgeCapabilities = permissionOverview.data ? overviewBridgeCapabilities(permissionOverview.data) : bridgeCapabilityRows(bridge, effectiveRuntime());
+  const webSettings = store.webUiOverview?.settings;
   return (
     <div className="space-y-3">
       <InstallSourceDialog
@@ -450,6 +469,58 @@ export function SettingsPanel(props: {
               showMirrorRetry={installEvent.stage === "failed" && lastInstallSourceKind === "official"}
             />
           ) : null}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+        <SectionHeader
+          icon={Keyboard}
+          title="工作台偏好"
+          description="对话输入、Token 用量和 CLI 会话显示。这里改完会立即保存。"
+        />
+        <div className="mt-4 divide-y divide-slate-100">
+          <PreferenceRow
+            icon={Keyboard}
+            title="发送快捷键"
+            description="选择 Enter 直接发送，或 Ctrl+Enter 发送、Enter 换行。"
+            control={(
+              <SendKeyPreferenceSegment
+                value={webSettings?.sendKey ?? "enter"}
+                saving={savingPreference === "sendKey"}
+                onChange={(sendKey) => void updateWorkbenchPreference(
+                  { sendKey, sendKeyHintDismissed: true },
+                  "sendKey",
+                  sendKey === "enter" ? "已切换为 Enter 发送。" : "已切换为 Ctrl+Enter 发送。",
+                )}
+              />
+            )}
+          />
+          <PreferenceRow
+            icon={Gauge}
+            title="Token 用量"
+            description="在对话里显示每轮输入、输出和上下文用量。"
+            control={(
+              <PreferenceSwitch
+                label="显示 Token 用量"
+                checked={webSettings?.showUsage !== false}
+                saving={savingPreference === "showUsage"}
+                onChange={(value) => void updateWorkbenchPreference({ showUsage: value }, "showUsage", "Token 用量显示已更新。")}
+              />
+            )}
+          />
+          <PreferenceRow
+            icon={Terminal}
+            title="CLI 会话"
+            description="显示 Hermes CLI 会话信息，方便排查本机任务运行。"
+            control={(
+              <PreferenceSwitch
+                label="显示 CLI 会话"
+                checked={webSettings?.showCliSessions !== false}
+                saving={savingPreference === "showCliSessions"}
+                onChange={(value) => void updateWorkbenchPreference({ showCliSessions: value }, "showCliSessions", "CLI 会话显示已更新。")}
+              />
+            )}
+          />
         </div>
       </section>
 
@@ -546,6 +617,74 @@ export function SettingsPanel(props: {
       </section>
 
     </div>
+  );
+}
+
+function PreferenceRow(props: { icon: typeof Settings; title: string; description: string; control: React.ReactNode }) {
+  const Icon = props.icon;
+  return (
+    <div className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 md:flex-row md:items-center md:justify-between">
+      <div className="flex min-w-0 gap-2.5">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-100">
+          <Icon size={16} strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold text-slate-900">{props.title}</p>
+          <p className="mt-1 text-[12px] leading-5 text-slate-500">{props.description}</p>
+        </div>
+      </div>
+      <div className="shrink-0 md:pl-4">{props.control}</div>
+    </div>
+  );
+}
+
+function SendKeyPreferenceSegment(props: { value: HermesWebUiSettings["sendKey"]; saving: boolean; onChange: (value: HermesWebUiSettings["sendKey"]) => void }) {
+  return (
+    <div className="inline-grid h-9 grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+      <SendKeyPreferenceButton label="Enter 发送" active={props.value === "enter"} saving={props.saving} onClick={() => props.onChange("enter")} />
+      <SendKeyPreferenceButton label="Ctrl+Enter 发送" active={props.value === "mod-enter"} saving={props.saving} onClick={() => props.onChange("mod-enter")} />
+    </div>
+  );
+}
+
+function SendKeyPreferenceButton(props: { label: string; active: boolean; saving: boolean; onClick: () => void }) {
+  return (
+    <button
+      className={cn(
+        "h-7 rounded-lg px-3 text-[12px] font-semibold transition disabled:cursor-wait",
+        props.active ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:bg-white/70 hover:text-slate-800",
+      )}
+      aria-pressed={props.active}
+      disabled={props.saving}
+      onClick={props.onClick}
+      type="button"
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function PreferenceSwitch(props: { label: string; checked: boolean; saving: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.checked}
+      aria-label={props.label}
+      disabled={props.saving}
+      onClick={() => props.onChange(!props.checked)}
+      className={cn(
+        "relative inline-flex h-7 w-12 shrink-0 rounded-full p-0.5 transition disabled:cursor-wait disabled:opacity-60",
+        props.checked ? "bg-slate-900" : "bg-slate-200",
+      )}
+    >
+      <span
+        className={cn(
+          "h-6 w-6 rounded-full bg-white shadow-[0_1px_2px_rgba(15,23,42,0.18)] transition-all",
+          props.checked ? "translate-x-5" : "translate-x-0",
+        )}
+      />
+    </button>
   );
 }
 

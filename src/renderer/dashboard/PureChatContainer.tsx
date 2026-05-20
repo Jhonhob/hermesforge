@@ -249,7 +249,7 @@ function PureRun(props: { run: TaskRunProjection; onOpenFix?: (target: FixTarget
   );
 }
 
-function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string; content: ReactNode; chrome?: ReactNode; metaSuffix?: string }) {
+function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string; content: ReactNode; chrome?: ReactNode; metaSuffix?: string; actions?: ReactNode }) {
   const isUser = props.role === "user";
   return (
     <article
@@ -261,8 +261,8 @@ function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string;
       )}
       tabIndex={0}
     >
-      <div className="mb-3 flex items-center justify-between gap-3 text-[11px] text-slate-400">
-        <div className="inline-flex items-center gap-2">
+      <div className="mb-3 flex min-w-0 items-center justify-between gap-3 text-[11px] text-slate-400">
+        <div className="inline-flex min-w-0 items-center gap-2">
           {!isUser ? (
             <span className="grid h-8 w-8 place-items-center rounded-full bg-[var(--hermes-primary-soft)] text-[var(--hermes-primary)] ring-1 ring-[var(--hermes-primary-border)]">
               <Sparkles size={15} />
@@ -275,7 +275,10 @@ function ChatMessageCard(props: { role: "user" | "assistant"; createdAt: string;
             {isUser ? "你" : "Hermes"}
           </span>
         </div>
-        <span>{props.metaSuffix ? `${props.metaSuffix} · ${formatShortDate(props.createdAt)}` : formatShortDate(props.createdAt)}</span>
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          <span className="whitespace-nowrap">{props.metaSuffix ? `${props.metaSuffix} · ${formatShortDate(props.createdAt)}` : formatShortDate(props.createdAt)}</span>
+          {props.actions}
+        </div>
       </div>
 
       {props.chrome}
@@ -322,6 +325,7 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
       role="assistant"
       createdAt={run.assistantMessage.createdAt}
       metaSuffix={statusLabel}
+      actions={<AssistantMessageActions run={run} onCopy={() => void copyMessage()} onContinue={continueMessage} />}
       chrome={(
         <>
           <div className="mb-3 flex items-center gap-2">
@@ -344,11 +348,6 @@ function AssistantMessageCard(props: { run: TaskRunProjection; onOpenFix?: (targ
             </div>
           </div>
 
-          <div className="pointer-events-none absolute right-4 top-4 flex items-center gap-1 rounded-full border border-[var(--hermes-primary-border)] bg-white/95 px-1.5 py-1 opacity-0 shadow-[0_8px_24px_rgba(91,77,255,0.12)] transition group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
-            <MessageActionButton icon={Copy} label="复制内容" onClick={() => void copyMessage()} />
-            <MessageActionButton icon={RefreshCcw} label="继续生成" onClick={continueMessage} />
-            <AssistantMoreMenu run={run} onCopy={() => void copyMessage()} onContinue={continueMessage} />
-          </div>
         </>
       )}
       content={(
@@ -390,6 +389,16 @@ function LongReplyExportHint(props: { run: TaskRunProjection }) {
         <FileDown size={13} />
         导出 Markdown
       </button>
+    </div>
+  );
+}
+
+function AssistantMessageActions(props: { run: TaskRunProjection; onCopy: () => void; onContinue: () => void }) {
+  return (
+    <div className="hermes-message-actions pointer-events-none inline-flex items-center gap-1 rounded-full border border-[var(--hermes-primary-border)] bg-white/95 px-1.5 py-1 opacity-0 shadow-[0_8px_24px_rgba(91,77,255,0.12)] transition group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+      <MessageActionButton icon={Copy} label="复制内容" onClick={props.onCopy} />
+      <MessageActionButton icon={RefreshCcw} label="继续生成" onClick={props.onContinue} />
+      <AssistantMoreMenu run={props.run} onCopy={props.onCopy} onContinue={props.onContinue} />
     </div>
   );
 }

@@ -36,6 +36,7 @@ const DEFAULT_SETTINGS: HermesWebUiSettings = {
   theme: "green-light",
   language: "zh",
   sendKey: "enter",
+  sendKeyHintDismissed: false,
   showUsage: false,
   showCliSessions: true,
 };
@@ -82,6 +83,7 @@ export class HermesWebUiService {
         theme: this.theme(parsed.theme),
         language: parsed.language === "en" ? "en" : "zh",
         sendKey: parsed.sendKey === "mod-enter" ? "mod-enter" : "enter",
+        sendKeyHintDismissed: parsed.sendKeyHintDismissed === true,
         showUsage: Boolean(parsed.showUsage),
         showCliSessions: parsed.showCliSessions !== false,
       };
@@ -96,8 +98,9 @@ export class HermesWebUiService {
       ...current,
       ...input,
       theme: this.theme(input.theme ?? current.theme),
-      language: input.language === "en" ? "en" : "zh",
-      sendKey: input.sendKey === "mod-enter" ? "mod-enter" : "enter",
+      language: input.language === "en" || input.language === "zh" ? input.language : current.language,
+      sendKey: input.sendKey === "mod-enter" || input.sendKey === "enter" ? input.sendKey : current.sendKey,
+      sendKeyHintDismissed: input.sendKeyHintDismissed ?? current.sendKeyHintDismissed,
     };
     await this.writeJson(this.settingsPath(), next);
     return next;

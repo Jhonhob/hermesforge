@@ -848,6 +848,7 @@ export type HermesWebUiSettings = {
   theme: ThemePreference["id"];
   language: "zh" | "en";
   sendKey: "enter" | "mod-enter";
+  sendKeyHintDismissed: boolean;
   showUsage: boolean;
   showCliSessions: boolean;
 };

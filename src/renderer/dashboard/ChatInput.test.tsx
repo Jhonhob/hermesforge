@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatInput } from "./ChatInput";
 import { useAppStore } from "../store";
@@ -15,7 +15,7 @@ describe("ChatInput", () => {
         updateSources: {},
       },
       webUiOverview: {
-        settings: { theme: "green-light", language: "zh", sendKey: "enter", showUsage: false, showCliSessions: true },
+        settings: { theme: "green-light", language: "zh", sendKey: "enter", sendKeyHintDismissed: false, showUsage: false, showCliSessions: true },
         projects: [],
         spaces: [],
         skills: [],
@@ -29,7 +29,10 @@ describe("ChatInput", () => {
       },
     });
     window.workbenchClient = {
-      saveWebUiSettings: vi.fn(),
+      saveWebUiSettings: vi.fn(async (input) => ({
+        ...useAppStore.getState().webUiOverview!.settings,
+        ...input,
+      })),
     } as unknown as Window["workbenchClient"];
   });
 
@@ -160,5 +163,27 @@ describe("ChatInput", () => {
 
     expect(screen.getByLabelText(/估算当前上下文占用/)).toBeInTheDocument();
     expect(screen.queryByLabelText(/实测当前上下文占用/)).toBeNull();
+  });
+
+  it("shows an inline send-key chooser and hides it after the user chooses", async () => {
+    const onStartTask = renderInput();
+
+    expect(screen.getByLabelText("发送方式")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ctrl+Enter 发送" }));
+
+    await waitFor(() => expect(window.workbenchClient.saveWebUiSettings).toHaveBeenCalledWith({
+      sendKey: "mod-enter",
+      sendKeyHintDismissed: true,
+    }));
+    expect(screen.queryByLabelText("发送方式")).toBeNull();
+
+    const input = screen.getByLabelText("给 Hermes 发送消息");
+    fireEvent.change(input, { target: { value: "继续检查" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onStartTask).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(onStartTask).toHaveBeenCalledTimes(1);
   });
 });

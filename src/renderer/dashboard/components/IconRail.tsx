@@ -22,6 +22,7 @@ export function IconRail() {
       theme: "green-light" as const,
       language: "zh" as const,
       sendKey: "enter" as const,
+      sendKeyHintDismissed: true,
       showUsage: false,
       showCliSessions: true,
     };

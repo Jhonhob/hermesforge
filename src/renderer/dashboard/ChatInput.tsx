@@ -1,4 +1,4 @@
-import { Command, DownloadCloud, Gauge, Mic, MicOff, Paperclip, Plus, Send, Square, X } from "lucide-react";
+import { Command, DownloadCloud, Gauge, Keyboard, Mic, MicOff, Paperclip, Plus, Send, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ClipboardEvent, DragEvent, ReactNode } from "react";
@@ -67,6 +67,7 @@ export function ChatInput(props: {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [isDraggingAttachment, setIsDraggingAttachment] = useState(false);
   const [isImportingAttachment, setIsImportingAttachment] = useState(false);
+  const [sendKeySaving, setSendKeySaving] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const listeningRef = useRef(false);
   const stoppingVoiceRef = useRef(false);
@@ -117,6 +118,8 @@ export function ChatInput(props: {
     ? props.sendBlockReason
     : `${currentModelLabel} · ${store.workspacePath ? shortPath(store.workspacePath) : "无工作区"} · ${permissionsLabel}${props.locked ? " · 工作区占用中" : ""}`;
   const hermesUpdate = store.hermesStatus?.update;
+  const sendKeySettings = store.webUiOverview?.settings;
+  const showSendKeyPrompt = Boolean(sendKeySettings && !sendKeySettings.sendKeyHintDismissed);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -620,6 +623,20 @@ export function ChatInput(props: {
     textareaRef.current?.focus();
   }
 
+  async function chooseSendKey(sendKey: "enter" | "mod-enter") {
+    setSendKeySaving(true);
+    try {
+      const settings = await window.workbenchClient.saveWebUiSettings({ sendKey, sendKeyHintDismissed: true });
+      store.setWebUiOverview(store.webUiOverview ? { ...store.webUiOverview, settings } : undefined);
+      store.success("发送方式已保存", sendKey === "enter" ? "Enter 会直接发送。" : "Ctrl+Enter 会直接发送。");
+      textareaRef.current?.focus();
+    } catch (error) {
+      store.error("发送方式保存失败", error instanceof Error ? error.message : "无法保存发送快捷键。");
+    } finally {
+      setSendKeySaving(false);
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1120px] px-4 pb-4 pt-3 2xl:max-w-[1240px]" data-testid="chat-input-shell">
       <div className="relative">
@@ -700,7 +717,7 @@ export function ChatInput(props: {
           />
 
           <div className="flex items-center justify-between gap-2 border-t border-slate-100/80 px-3 pb-2.5 pt-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
               <div className="relative" ref={plusMenuRef}>
                 <button
                   className="grid h-8 w-8 place-items-center rounded-full border border-[var(--hermes-primary-border)] text-[var(--hermes-primary)] transition hover:bg-[var(--hermes-primary-soft)]"
@@ -784,6 +801,13 @@ export function ChatInput(props: {
                   </div>
                 ) : null}
               </div>
+              {showSendKeyPrompt ? (
+                <SendKeyInlinePrompt
+                  value={sendKeySettings?.sendKey ?? "enter"}
+                  saving={sendKeySaving}
+                  onChange={(sendKey) => void chooseSendKey(sendKey)}
+                />
+              ) : null}
             </div>
 
             <div className="flex min-w-0 shrink-0 items-center gap-1.5">
@@ -1293,6 +1317,41 @@ function latestUsageForSession(
 
 function latestByTimestamp<T extends { at: string }>(events: T[]) {
   return events.reduce<T | undefined>((latest, event) => (!latest || event.at >= latest.at ? event : latest), undefined);
+}
+
+function SendKeyInlinePrompt(props: { value: "enter" | "mod-enter"; saving: boolean; onChange: (sendKey: "enter" | "mod-enter") => void }) {
+  return (
+    <div
+      className="hermes-send-key-choice inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-slate-200/80 bg-white/75 px-1.5 shadow-sm backdrop-blur"
+      aria-label="发送方式"
+    >
+      <span className="inline-flex items-center gap-1.5 px-1 text-[11px] font-semibold text-slate-500 max-sm:hidden">
+        <Keyboard size={12} className="text-slate-400" />
+        发送方式
+      </span>
+      <span className="h-4 w-px bg-slate-200 max-sm:hidden" />
+      <SendKeyPromptButton label="Enter" ariaLabel="Enter 发送" active={props.value === "enter"} saving={props.saving} onClick={() => props.onChange("enter")} />
+      <SendKeyPromptButton label="Ctrl+Enter" ariaLabel="Ctrl+Enter 发送" active={props.value === "mod-enter"} saving={props.saving} onClick={() => props.onChange("mod-enter")} />
+    </div>
+  );
+}
+
+function SendKeyPromptButton(props: { label: string; ariaLabel: string; active: boolean; saving: boolean; onClick: () => void }) {
+  return (
+    <button
+      className={cn(
+        "h-6 rounded-full px-2 text-[11px] font-semibold transition disabled:cursor-wait",
+        props.active ? "bg-white text-[var(--hermes-primary)] shadow-sm ring-1 ring-[var(--hermes-primary-border)]" : "text-slate-500 hover:bg-white/70 hover:text-slate-700",
+      )}
+      aria-label={props.ariaLabel}
+      aria-pressed={props.active}
+      disabled={props.saving}
+      onClick={props.onClick}
+      type="button"
+    >
+      {props.label}
+    </button>
+  );
 }
 
 function prefersUsageEvent(next: Extract<EngineEvent, { type: "usage" }>, current: Extract<EngineEvent, { type: "usage" }>) {
