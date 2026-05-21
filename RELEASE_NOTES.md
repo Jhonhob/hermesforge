@@ -1,5 +1,25 @@
 # Release Notes
 
+## Hermes Forge v0.2.28
+
+发布日期：2026-05-21
+
+这是一次面向飞书多机器人配置的用户反馈修复版本。重点解决已创建一个飞书机器人后，再点击“新增飞书机器人”没有可见反应的问题，并补强多实例保存隔离验证，避免多个 Bot 的配置、密钥和运行目录互相覆盖。
+
+### 核心修复
+
+- **飞书新增机器人按钮恢复可用**：新增飞书 Bot 时会保留未保存草稿实例，编辑器立即打开，不再因为草稿尚未进入已保存列表而看起来无响应。
+- **新增入口更明确**：飞书卡片的新增按钮改为明确的加号入口，并补充可访问标签，降低用户误解为外链或无效按钮的概率。
+- **多 Bot 保存隔离回归验证**：补充测试覆盖连续保存 `alpha` / `beta` 两个飞书实例，确认配置、secret ref、实例 `.env` 和主 `.env` 均保持隔离。
+
+### 验证
+
+- `npx vitest run src/renderer/dashboard/components/panels/ConnectorsPanel.test.tsx` 通过，9 个测试全部成功
+- `npx vitest run src/main/hermes-connector-service.test.ts` 通过，31 个测试全部成功
+- `npm run check` 通过
+- `npm test` 通过，52 个测试文件、408 个测试全部成功
+- `npm run build` 通过
+
 ## Hermes Forge v0.2.27
 
 发布日期：2026-05-20

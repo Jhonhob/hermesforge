@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorsPanel } from "./ConnectorsPanel";
 import type { HermesConnectorField, HermesConnectorListResult, WeixinQrLoginStatus } from "../../../../shared/types";
@@ -256,6 +256,53 @@ describe("ConnectorsPanel", () => {
     expect(screen.getByDisplayValue("mentions")).toBeInTheDocument();
     expect(screen.getByDisplayValue("ou_saved")).toBeInTheDocument();
     expect(screen.getAllByText("已保存密钥，留空保存不会覆盖。")).toHaveLength(2);
+  });
+
+  it("opens and saves a draft when adding another Feishu bot instance", async () => {
+    listConnectors.mockResolvedValue(buildListResult({
+      connectors: [
+        buildConnector({
+          platformId: "feishu",
+          label: "Feishu",
+          status: "configured",
+          runtimeStatus: "running",
+          configured: true,
+          message: "已配置，Gateway 正在运行。",
+          instanceId: "alpha",
+          agentId: "agent-alpha",
+          fields: [
+            { key: "appId", envVar: "FEISHU_APP_ID", label: "App ID", type: "text", required: true, placeholder: "cli_xxx" },
+            { key: "appSecret", envVar: "FEISHU_APP_SECRET", label: "App Secret", type: "password", required: true, secret: true, placeholder: "app secret" },
+            { key: "domain", envVar: "FEISHU_DOMAIN", label: "Domain", type: "text" },
+            { key: "connectionMode", envVar: "FEISHU_CONNECTION_MODE", label: "连接模式", type: "text" },
+            { key: "agentId", envVar: "HERMES_AGENT_ID", label: "绑定 Agent", type: "text" },
+          ],
+        }),
+      ],
+    }));
+
+    render(<ConnectorsPanel />);
+
+    expect(await screen.findByText("Feishu")).toBeInTheDocument();
+    expect(screen.queryByText("配置 Feishu")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新增飞书机器人" }));
+
+    expect(screen.getByText("配置 Feishu")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("cli_xxx"), { target: { value: "cli_beta" } });
+    fireEvent.change(screen.getByPlaceholderText("app secret"), { target: { value: "secret_beta" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(saveConnector).toHaveBeenCalledWith(expect.objectContaining({
+      platformId: "feishu",
+      instanceId: expect.stringMatching(/^bot-/),
+      enabled: true,
+      values: expect.objectContaining({
+        appId: "cli_beta",
+        appSecret: "secret_beta",
+        domain: "feishu",
+        connectionMode: "websocket",
+      }),
+    })));
   });
 
   it("shows timeout state in the Weixin QR wizard", async () => {
