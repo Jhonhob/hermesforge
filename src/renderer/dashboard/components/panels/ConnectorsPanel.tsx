@@ -8,6 +8,7 @@ import {
   Loader2,
   Pause,
   Play,
+  Plus,
   QrCode,
   RefreshCw,
   RotateCw,
@@ -112,6 +113,7 @@ export function ConnectorsPanel() {
   const [editingKey, setEditingKey] = useState<string | undefined>();
   const [formValues, setFormValues] = useState<FormValues>({});
   const [formEnabled, setFormEnabled] = useState(true);
+  const [draftConnector, setDraftConnector] = useState<HermesConnectorConfig | undefined>();
   const [showAdvancedEditor, setShowAdvancedEditor] = useState(false);
   const [editorJustOpened, setEditorJustOpened] = useState(false);
   const [busy, setBusy] = useState<string | undefined>();
@@ -123,8 +125,11 @@ export function ConnectorsPanel() {
   const editorRef = useRef<HTMLElement | null>(null);
 
   const editing = useMemo(
-    () => data?.connectors.find((connector) => connectorKey(connector) === editingKey),
-    [data?.connectors, editingKey],
+    () => {
+      if (draftConnector && connectorKey(draftConnector) === editingKey) return draftConnector;
+      return data?.connectors.find((connector) => connectorKey(connector) === editingKey);
+    },
+    [data?.connectors, draftConnector, editingKey],
   );
   const weixinConnector = data?.connectors.find((connector) => connector.platform.id === "weixin");
   const recommendation = getRecommendation(data);
@@ -181,7 +186,7 @@ export function ConnectorsPanel() {
     }
   }
 
-  function startEditing(connector: HermesConnectorConfig) {
+  function startEditing(connector: HermesConnectorConfig, options: { draft?: boolean } = {}) {
     const values: FormValues = {};
     for (const field of connector.platform.fields) {
       values[field.key] = field.secret
@@ -189,6 +194,7 @@ export function ConnectorsPanel() {
         : connector.values[field.key] ?? (field.type === "boolean" ? false : "");
     }
     const nextValues = withConnectorDefaults(connector.platform.id, values);
+    setDraftConnector(options.draft ? connector : undefined);
     setEditingKey(connectorKey(connector));
     setFormEnabled(connector.enabled);
     setShowAdvancedEditor(false);
@@ -213,7 +219,12 @@ export function ConnectorsPanel() {
       updatedAt: undefined,
       lastSyncedAt: undefined,
       message: "新飞书机器人实例，保存后会独立同步和启动。",
-    });
+    }, { draft: true });
+  }
+
+  function closeEditor() {
+    setEditingKey(undefined);
+    setDraftConnector(undefined);
   }
 
   function updateEditingField(field: HermesConnectorField, value: string | boolean) {
@@ -242,7 +253,7 @@ export function ConnectorsPanel() {
       await window.workbenchClient.saveConnector(input);
       await load();
       setMessage(`${editing.platform.label} 配置已加密保存。`);
-      setEditingKey(undefined);
+      closeEditor();
     });
   }
 
@@ -251,7 +262,7 @@ export function ConnectorsPanel() {
       await window.workbenchClient.disableConnector({ platformId: connector.platform.id, instanceId: connector.instanceId });
       await load();
       setMessage(`${connector.platform.label} 已禁用。`);
-      if (editingKey === connectorKey(connector)) setEditingKey(undefined);
+      if (editingKey === connectorKey(connector)) closeEditor();
     });
   }
 
@@ -418,7 +429,7 @@ export function ConnectorsPanel() {
               <h3 className="text-sm font-semibold text-slate-900">配置 {editing.platform.label}</h3>
               <p className="mt-1 text-xs text-slate-500">{editing.platform.description}</p>
             </div>
-            <button className="text-xs text-slate-400 hover:text-slate-600" onClick={() => setEditingKey(undefined)} type="button">
+            <button className="text-xs text-slate-400 hover:text-slate-600" onClick={closeEditor} type="button">
               关闭
             </button>
           </div>
@@ -493,7 +504,7 @@ export function ConnectorsPanel() {
           </div>
 
           <div className="mt-4 flex justify-end gap-2">
-            <button className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 hover:bg-slate-100" onClick={() => setEditingKey(undefined)} type="button">
+            <button className="rounded-lg px-4 py-2 text-sm font-medium text-slate-500 hover:bg-slate-100" onClick={closeEditor} type="button">
               取消
             </button>
             <button
@@ -702,11 +713,12 @@ function ConnectorCard(props: {
           {props.onAddFeishuInstance ? (
             <button
               className="grid h-8 w-8 place-items-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              aria-label="新增飞书机器人"
               onClick={props.onAddFeishuInstance}
               title="新增飞书机器人"
               type="button"
             >
-              <ExternalLink size={14} />
+              <Plus size={14} />
             </button>
           ) : null}
           <button

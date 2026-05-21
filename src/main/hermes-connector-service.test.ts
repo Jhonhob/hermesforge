@@ -462,6 +462,76 @@ describe("HermesConnectorService helpers", () => {
     await expect(fs.stat(staleProfileHome)).rejects.toThrow();
   });
 
+  it("saves multiple Feishu bot instances without overwriting config, secrets, or env files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-save-multi-"));
+    const forgeHome = path.join(tempDir, "hermes-home");
+    const secrets = new Map<string, string>();
+    await fs.mkdir(forgeHome, { recursive: true });
+
+    const service = new HermesConnectorService(
+      { baseDir: () => tempDir, hermesDir: () => forgeHome } as never,
+      {
+        hasSecret: vi.fn(async (ref: string) => secrets.has(ref)),
+        readSecret: vi.fn(async (ref: string) => secrets.get(ref)),
+        saveSecret: vi.fn(async (ref: string, value: string) => {
+          secrets.set(ref, value);
+        }),
+      } as never,
+      async () => {
+        throw new Error("Hermes root is not needed for this sync-only test.");
+      },
+    );
+
+    await service.save({
+      platformId: "feishu",
+      instanceId: "alpha",
+      enabled: true,
+      values: {
+        appId: "cli_alpha",
+        appSecret: "secret-alpha",
+        domain: "feishu",
+        connectionMode: "websocket",
+        agentId: "agent-alpha",
+      },
+    });
+    await service.save({
+      platformId: "feishu",
+      instanceId: "beta",
+      enabled: true,
+      values: {
+        appId: "cli_beta",
+        appSecret: "secret-beta",
+        domain: "feishu",
+        connectionMode: "websocket",
+        agentId: "agent-beta",
+      },
+    });
+
+    const rawConfig = JSON.parse(await fs.readFile(path.join(tempDir, "connectors-config.json"), "utf8"));
+    expect(rawConfig.platforms.feishu.instances.alpha.values).toMatchObject({ appId: "cli_alpha", agentId: "agent-alpha" });
+    expect(rawConfig.platforms.feishu.instances.beta.values).toMatchObject({ appId: "cli_beta", agentId: "agent-beta" });
+    expect(rawConfig.platforms.feishu.instances.alpha.secretRefs.appSecret).toBe("connector.feishu.alpha.appSecret");
+    expect(rawConfig.platforms.feishu.instances.beta.secretRefs.appSecret).toBe("connector.feishu.beta.appSecret");
+    expect(secrets.get("connector.feishu.alpha.appSecret")).toBe("secret-alpha");
+    expect(secrets.get("connector.feishu.beta.appSecret")).toBe("secret-beta");
+
+    const listed = await service.list();
+    expect(listed.connectors.filter((item) => item.platform.id === "feishu").map((item) => item.instanceId)).toEqual(["alpha", "beta"]);
+
+    const result = await service.syncEnv();
+    const mainEnv = await fs.readFile(result.envPath, "utf8");
+    const alphaEnv = await fs.readFile(path.join(forgeHome, "profiles", "agent-alpha", "connector-instances", "feishu", "alpha", ".env"), "utf8");
+    const betaEnv = await fs.readFile(path.join(forgeHome, "profiles", "agent-beta", "connector-instances", "feishu", "beta", ".env"), "utf8");
+
+    expect(mainEnv).not.toContain("FEISHU_APP_ID=");
+    expect(alphaEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_ID=cli_alpha");
+    expect(alphaEnv).toContain("FEISHU_APP_SECRET=secret-alpha");
+    expect(betaEnv).toContain("HERMES_CONNECTOR_INSTANCE_ID=feishu:beta");
+    expect(betaEnv).toContain("FEISHU_APP_ID=cli_beta");
+    expect(betaEnv).toContain("FEISHU_APP_SECRET=secret-beta");
+  });
+
   it("imports legacy Feishu env into the default instance without dropping existing bot instances", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-connector-feishu-import-"));
     const forgeHome = path.join(tempDir, "hermes-home");
