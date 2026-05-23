@@ -348,9 +348,11 @@ describe("SetupService dependency health", () => {
     const git = summary.checks.find((check) => check.id === "git");
     const python = summary.checks.find((check) => check.id === "python");
     const weixin = summary.checks.find((check) => check.id === "weixin-aiohttp");
+    const feishu = summary.checks.find((check) => check.id === "feishu-lark-oapi");
     expect(git).toMatchObject({ status: "missing", canAutoFix: true, autoFixId: "git", blocking: false });
     expect(python).toMatchObject({ status: "missing", canAutoFix: true, autoFixId: "python", blocking: false });
     expect(weixin).toMatchObject({ status: "warning", canAutoFix: true, autoFixId: "weixin_aiohttp", blocking: false });
+    expect(feishu).toMatchObject({ status: "warning", canAutoFix: true, autoFixId: "feishu_lark_oapi", blocking: false });
     expect(summary.ready).toBe(true);
   });
 
@@ -378,6 +380,20 @@ describe("SetupService dependency health", () => {
     expect(runCommandMock).toHaveBeenCalledWith(
       "python",
       ["-m", "pip", "install", "--upgrade", "aiohttp"],
+      expect.objectContaining({ cwd: process.cwd() }),
+    );
+  });
+
+  it("repairs connector adapter dependencies through pip", async () => {
+    const service = createService();
+
+    const result = await service.repairDependency("feishu_lark_oapi");
+
+    expect(result.ok).toBe(true);
+    expect(result.command).toBe("python -m pip install --upgrade lark-oapi");
+    expect(runCommandMock).toHaveBeenCalledWith(
+      "python",
+      ["-m", "pip", "install", "--upgrade", "lark-oapi"],
       expect.objectContaining({ cwd: process.cwd() }),
     );
   });

@@ -239,6 +239,14 @@ export class NativeInstallStrategy implements InstallStrategy {
         return await this.repairPythonPackage(id, "python-dotenv", "python-dotenv", "请重新检查 Hermes 状态，确认 dotenv 模块已可导入。");
       case "weixin_aiohttp":
         return await this.repairPythonPackage(id, "aiohttp", "aiohttp");
+      case "feishu_lark_oapi":
+        return await this.repairPythonPackage(id, "lark-oapi", "lark-oapi", "请重新检查系统状态，确认飞书连接依赖已就绪。");
+      case "telegram_bot":
+        return await this.repairPythonPackage(id, "python-telegram-bot", "python-telegram-bot[webhooks]", "请重新检查系统状态，确认 Telegram 连接依赖已就绪。");
+      case "discord_py":
+        return await this.repairPythonPackage(id, "discord.py", "discord.py[voice]", "请重新检查系统状态，确认 Discord 连接依赖已就绪。");
+      case "slack_bolt":
+        return await this.repairPythonPackage(id, "slack-bolt", "slack-bolt", "请重新检查系统状态，确认 Slack 连接依赖已就绪。");
       default:
         return {
           ok: false,

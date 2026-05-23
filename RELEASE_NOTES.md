@@ -1,5 +1,26 @@
 # Release Notes
 
+## Hermes Forge v0.2.29
+
+发布日期：2026-05-23
+
+这是一次面向连接器可用性和长文本排版稳定性的闭环修复版本。重点解决用户侧把 `hermes plugins list` 误当作全部平台集成清单、飞书等内置 Gateway adapter 缺少运行依赖时没有预检提示，以及智能体输出空格对齐表格时 Markdown 渲染混乱的问题。
+
+### 核心修复
+
+- **连接器依赖预检补齐**：系统状态现在会检测飞书 `lark-oapi`、Telegram `python-telegram-bot`、Discord `discord.py`、Slack `slack-bolt`，不再只覆盖微信 `aiohttp`。
+- **连接器依赖可一键修复**：新增飞书、Telegram、Discord、Slack 的修复 ID、IPC schema 和按钮文案，缺失依赖时可以直接安装到 Hermes 运行环境。
+- **内置平台判断更可靠**：明确将运行时 adapter 与插件目录区分开，避免把 `hermes plugins list` 没列出的内置平台误判成未集成。
+- **空格对齐表格自动修复**：Markdown 渲染前会保守识别 CLI/智能体常见的空格对齐表格，并转换为 GFM 表格，长文本不再挤成一行或错位换行。
+
+### 验证
+
+- 当前 Hermes venv 已验证 `lark_oapi`、`telegram`、`discord`、`slack_bolt`、`aiohttp` 均可导入
+- `npm test -- --run src/renderer/markdown/StreamingMarkdown.test.tsx src/setup/setup-service.test.ts` 通过，16 个测试全部成功
+- `npm run check` 通过
+- `npm test -- --run` 通过，52 个测试文件、410 个测试全部成功
+- `npm run build` 通过
+
 ## Hermes Forge v0.2.28
 
 发布日期：2026-05-21

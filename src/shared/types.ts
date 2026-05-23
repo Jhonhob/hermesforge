@@ -1341,7 +1341,16 @@ export type ModelConfigUpdateResult = RuntimeConfig & {
 };
 
 export type SetupRequirementStatus = "ok" | "missing" | "warning" | "running" | "failed";
-export type SetupDependencyRepairId = "git" | "python" | "hermes_pyyaml" | "hermes_python_dotenv" | "weixin_aiohttp";
+export type SetupDependencyRepairId =
+  | "git"
+  | "python"
+  | "hermes_pyyaml"
+  | "hermes_python_dotenv"
+  | "weixin_aiohttp"
+  | "feishu_lark_oapi"
+  | "telegram_bot"
+  | "discord_py"
+  | "slack_bolt";
 export type SetupFixAction =
   | "configure_hermes"
   | "configure_model"

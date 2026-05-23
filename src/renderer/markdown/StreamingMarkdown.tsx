@@ -9,7 +9,8 @@ type Block = { content: string; code: boolean };
 
 export function StreamingMarkdown(props: { content: string; isStreaming?: boolean; className?: string; onFileClick?: (path: string) => void }) {
   const deferredContent = React.useDeferredValue(props.content);
-  const content = props.isStreaming ? compactStreamingMarkdown(deferredContent) : props.content;
+  const rawContent = props.isStreaming ? compactStreamingMarkdown(deferredContent) : props.content;
+  const content = React.useMemo(() => normalizeLooseMarkdownTables(rawContent), [rawContent]);
   const blocks = React.useMemo(() => splitIntoBlocks(content), [content]);
   return (
     <div className={props.className}>
@@ -31,6 +32,96 @@ function compactStreamingMarkdown(content: string) {
   const lineBreak = tail.indexOf("\n");
   const trimmedTail = lineBreak > 0 ? tail.slice(lineBreak + 1) : tail;
   return `> 正在生成长回复，已临时折叠前文以保持输入流畅。完成后会显示完整内容。\n\n${trimmedTail}`;
+}
+
+function normalizeLooseMarkdownTables(content: string) {
+  const lines = content.split("\n");
+  const output: string[] = [];
+  let pending: string[] = [];
+  let inCode = false;
+
+  const flushPending = () => {
+    if (pending.length === 0) return;
+    output.push(...normalizeLooseTableBlock(pending));
+    pending = [];
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("```")) {
+      flushPending();
+      output.push(line);
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      output.push(line);
+      continue;
+    }
+    if (parseLooseTableRow(line)) {
+      pending.push(line);
+      continue;
+    }
+    flushPending();
+    output.push(line);
+  }
+  flushPending();
+  return output.join("\n");
+}
+
+function normalizeLooseTableBlock(lines: string[]) {
+  if (lines.length < 2) return lines;
+  const rows = lines.map((line) => parseLooseTableRow(line));
+  if (rows.some((row) => !row)) return lines;
+  const parsedRows = rows as string[][];
+  if (!looksLikeLooseTableHeader(parsedRows[0], lines[0])) return lines;
+  if (!parsedRows.slice(1).some((row, index) => looksLikeLooseTableData(row, lines[index + 1]))) return lines;
+
+  const columnCount = Math.max(...parsedRows.map((row) => row.length));
+  const header = normalizeLooseTableHeader(parsedRows[0], columnCount);
+  const body = parsedRows.slice(1).map((row) => padRow(row, columnCount));
+  return [
+    toMarkdownTableRow(header),
+    toMarkdownTableRow(header.map(() => "---")),
+    ...body.map((row) => toMarkdownTableRow(row)),
+  ];
+}
+
+function parseLooseTableRow(line: string): string[] | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("|")) return undefined;
+  if (/^(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|<\/?\w)/.test(trimmed)) return undefined;
+  if (/^[-:| ]+$/.test(trimmed)) return undefined;
+
+  const platformMatch = trimmed.match(/^(.+?)\s+(platforms\/\S+)\s+(.+)$/);
+  if (platformMatch) return [platformMatch[1].trim(), platformMatch[2].trim(), platformMatch[3].trim()];
+
+  const cells = trimmed.split(/\s{2,}|\t+/).map((cell) => cell.trim()).filter(Boolean);
+  return cells.length >= 2 ? cells : undefined;
+}
+
+function looksLikeLooseTableHeader(cells: string[], line: string) {
+  if (cells.length < 2) return false;
+  return /状态|平台|插件|名称|路径|Name|Status|Platform|Plugin|Path/i.test(line);
+}
+
+function looksLikeLooseTableData(cells: string[], line: string) {
+  if (cells.length < 2) return false;
+  return /platforms\/|已安装|未安装|✅|❌|ok|installed|missing/i.test(line);
+}
+
+function normalizeLooseTableHeader(cells: string[], columnCount: number) {
+  if (cells.length === 2 && columnCount === 3 && /状态|Status/i.test(cells[1])) {
+    return [cells[0], "路径", cells[1]];
+  }
+  return padRow(cells, columnCount);
+}
+
+function padRow(cells: string[], columnCount: number) {
+  return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
+}
+
+function toMarkdownTableRow(cells: string[]) {
+  return `| ${cells.map((cell) => cell.replace(/\|/g, "\\|")).join(" | ")} |`;
 }
 
 const MemoizedMarkdownBlock = React.memo(function MarkdownBlock(props: { content: string; onFileClick?: (path: string) => void }) {

@@ -543,6 +543,11 @@ function welcomeSetupFixLabel(id: SetupDependencyRepairId) {
   if (id === "git") return "装 Git";
   if (id === "python") return "装 Python";
   if (id === "hermes_pyyaml") return "修 Hermes";
+  if (id === "hermes_python_dotenv") return "修 Hermes";
+  if (id === "feishu_lark_oapi") return "修飞书";
+  if (id === "telegram_bot") return "修 Telegram";
+  if (id === "discord_py") return "修 Discord";
+  if (id === "slack_bolt") return "修 Slack";
   return "修微信";
 }
 

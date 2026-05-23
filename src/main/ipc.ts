@@ -98,7 +98,17 @@ const BLOCKED_OPEN_PATH_EXTENSIONS = new Set([
   ".app", ".dmg", ".pkg", // macOS
 ]);
 const attachmentSourcePathsSchema = z.array(workspacePathInputSchema).max(12);
-const setupDependencyRepairIdSchema = z.enum(["git", "python", "hermes_pyyaml", "hermes_python_dotenv", "weixin_aiohttp"]);
+const setupDependencyRepairIdSchema = z.enum([
+  "git",
+  "python",
+  "hermes_pyyaml",
+  "hermes_python_dotenv",
+  "weixin_aiohttp",
+  "feishu_lark_oapi",
+  "telegram_bot",
+  "discord_py",
+  "slack_bolt",
+]);
 const installHermesOptionsSchema = z.object({
   rootPath: z.string().trim().min(1).max(1000).optional(),
   source: z.object({

@@ -878,6 +878,10 @@ function setupFixButtonLabel(check: SetupCheck) {
   if (check.autoFixId === "hermes_pyyaml") return "修复 Hermes 依赖";
   if (check.autoFixId === "hermes_python_dotenv") return "修复 Hermes 依赖";
   if (check.autoFixId === "weixin_aiohttp") return "修复微信依赖";
+  if (check.autoFixId === "feishu_lark_oapi") return "修复飞书依赖";
+  if (check.autoFixId === "telegram_bot") return "修复 Telegram 依赖";
+  if (check.autoFixId === "discord_py") return "修复 Discord 依赖";
+  if (check.autoFixId === "slack_bolt") return "修复 Slack 依赖";
   if (check.fixAction === "install_hermes") return "自动安装 Hermes";
   if (check.fixAction === "update_hermes") return "更新 Hermes Agent";
   if (check.fixAction === "configure_model") return "打开模型配置";

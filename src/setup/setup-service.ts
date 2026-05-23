@@ -96,6 +96,34 @@ export class SetupService {
         blocking: true,
       }),
       await this.checkPythonPackageWithRuntime(runtimeProbe, "weixin-aiohttp", "微信连接依赖", "aiohttp", "aiohttp"),
+      await this.checkHermesPythonPackageWithRuntime(runtimeProbe, "feishu-lark-oapi", "飞书连接依赖", "lark_oapi", "lark-oapi", {
+        description: "飞书 Gateway 适配器需要 lark-oapi；缺失时即使配置已填写，飞书实例也无法启动。",
+        recommendedAction: "点击修复飞书依赖，或在 Hermes venv 中执行 python -m pip install --upgrade lark-oapi。",
+        fixAction: "install_hermes_dependency",
+        autoFixId: "feishu_lark_oapi",
+        blocking: false,
+      }),
+      await this.checkHermesPythonPackageWithRuntime(runtimeProbe, "telegram-bot", "Telegram 连接依赖", "telegram", "python-telegram-bot[webhooks]", {
+        description: "Telegram Gateway 适配器需要 python-telegram-bot；缺失时 Telegram Bot 无法启动。",
+        recommendedAction: "点击修复 Telegram 依赖，或在 Hermes venv 中执行 python -m pip install --upgrade python-telegram-bot[webhooks]。",
+        fixAction: "install_hermes_dependency",
+        autoFixId: "telegram_bot",
+        blocking: false,
+      }),
+      await this.checkHermesPythonPackageWithRuntime(runtimeProbe, "discord-py", "Discord 连接依赖", "discord", "discord.py[voice]", {
+        description: "Discord Gateway 适配器需要 discord.py；缺失时 Discord Bot 无法启动。",
+        recommendedAction: "点击修复 Discord 依赖，或在 Hermes venv 中执行 python -m pip install --upgrade discord.py[voice]。",
+        fixAction: "install_hermes_dependency",
+        autoFixId: "discord_py",
+        blocking: false,
+      }),
+      await this.checkHermesPythonPackageWithRuntime(runtimeProbe, "slack-bolt", "Slack 连接依赖", "slack_bolt", "slack-bolt", {
+        description: "Slack Gateway 适配器需要 slack-bolt；缺失时 Slack Socket Mode 无法启动。",
+        recommendedAction: "点击修复 Slack 依赖，或在 Hermes venv 中执行 python -m pip install --upgrade slack-bolt。",
+        fixAction: "install_hermes_dependency",
+        autoFixId: "slack_bolt",
+        blocking: false,
+      }),
       await this.checkModelConfig(config),
       await this.checkWritable("user-data", "用户数据目录", this.appPaths.baseDir()),
     ];
@@ -479,6 +507,14 @@ export class SetupService {
         return await this.repairPythonPackage(id, "python-dotenv", "python-dotenv", "请重新检查 Hermes 状态，确认 dotenv 模块已可导入。");
       case "weixin_aiohttp":
         return await this.repairPythonPackage(id, "aiohttp", "aiohttp");
+      case "feishu_lark_oapi":
+        return await this.repairPythonPackage(id, "lark-oapi", "lark-oapi", "请重新检查系统状态，确认飞书连接依赖已就绪。");
+      case "telegram_bot":
+        return await this.repairPythonPackage(id, "python-telegram-bot", "python-telegram-bot[webhooks]", "请重新检查系统状态，确认 Telegram 连接依赖已就绪。");
+      case "discord_py":
+        return await this.repairPythonPackage(id, "discord.py", "discord.py[voice]", "请重新检查系统状态，确认 Discord 连接依赖已就绪。");
+      case "slack_bolt":
+        return await this.repairPythonPackage(id, "slack-bolt", "slack-bolt", "请重新检查系统状态，确认 Slack 连接依赖已就绪。");
       default:
         return {
           ok: false,

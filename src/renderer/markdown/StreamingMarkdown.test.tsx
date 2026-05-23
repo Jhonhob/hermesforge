@@ -22,4 +22,31 @@ describe("StreamingMarkdown", () => {
     expect(screen.getByRole("columnheader", { name: "路径" })).toHaveClass("whitespace-nowrap");
     expect(screen.getByRole("cell", { name: "pages/index/index" })).toHaveClass("[overflow-wrap:break-word]");
   });
+
+  it("repairs space-aligned CLI tables before rendering markdown", () => {
+    render(
+      <StreamingMarkdown
+        content={[
+          "从 hermes plugins list 可以看到已安装的平台插件：",
+          "",
+          "平台插件名    状态",
+          "Google Chat   platforms/google_chat   ✅ 已安装",
+          "IRC           platforms/irc           ✅ 已安装",
+          "LINE          platforms/line          ✅ 已安装",
+          "SimpleX       platforms/simplex       ✅ 已安装",
+          "MicrosoftTeams     platforms/teams       ✅ 已安装",
+          "❌ 微信（WeChat） - ❌ 飞书（Feishu/Lark）",
+        ].join("\n")}
+        className="hermes-markdown [overflow-wrap:anywhere]"
+      />,
+    );
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "平台插件名" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "路径" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "状态" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "Google Chat" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "platforms/google_chat" })).toBeInTheDocument();
+    expect(screen.getAllByRole("cell", { name: "✅ 已安装" })).toHaveLength(5);
+  });
 });
