@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, FolderOpen, HeartHandshake, MoreHorizontal, PanelRightOpen, PencilLine, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { ExternalLink, FolderOpen, MoreHorizontal, PanelRightOpen, PencilLine, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
 import type { ClientUpdateEvent, SessionMetaPatch } from "../../../shared/types";
 import { useAppStore } from "../../store";
 import { cn } from "../DashboardPrimitives";
@@ -15,7 +15,6 @@ export function HermesHeader(props: {
   onToggleAgentPanel: () => void;
   onUpdateActiveSessionMeta: (patch: SessionMetaPatch) => void;
   onOpenSessionFolder: () => void;
-  onOpenSupport: () => void;
   inspectorOpen?: boolean;
   workspaceDrawerOpen?: boolean;
   agentPanelOpen?: boolean;
@@ -197,16 +196,6 @@ export function HermesHeader(props: {
         if (window.workbenchClient && typeof window.workbenchClient.openHelp === "function") {
           window.workbenchClient.openHelp();
         }
-        setShowMenu(false);
-        setConfirmingDelete(false);
-      },
-    },
-    { divider: true },
-    {
-      icon: HeartHandshake,
-      label: "赞助与反馈",
-      action: () => {
-        props.onOpenSupport();
         setShowMenu(false);
         setConfirmingDelete(false);
       },

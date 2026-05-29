@@ -25,7 +25,6 @@ import type {
   WorkSession,
 } from "../shared/types";
 import { DashboardView } from "./dashboard/DashboardView";
-import { SupportView } from "./dashboard/SupportView";
 import { WelcomePage, type WelcomeCompleteTarget } from "./dashboard/WelcomePage";
 import { ToastContainer } from "./dashboard/ToastNotification";
 import { PageLoader } from "./dashboard/LoadingIndicator";
@@ -1757,9 +1756,7 @@ function App() {
   return (
     <>
       {store.isLoading("bootstrap") && <PageLoader />}
-      {store.view === "support" ? (
-        <SupportView onBack={() => store.setView("home")} />
-      ) : store.view === "settings" ? (
+      {store.view === "settings" ? (
         <SettingsView
           overview={configOverview}
           initialSection={settingsInitialSection}
@@ -1789,7 +1786,6 @@ function App() {
           onUpdateActiveSessionMeta={updateActiveSessionMeta}
           onUpdateSessionMeta={updateSessionMeta}
           onOpenSessionFolder={openActiveSessionFolder}
-          onOpenSupport={() => store.setView("support")}
           onClearSession={clearActiveSession}
           onStartTask={startTask}
           onCancelTask={cancelTask}
