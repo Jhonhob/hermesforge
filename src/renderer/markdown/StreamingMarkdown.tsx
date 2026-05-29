@@ -10,7 +10,8 @@ type Block = { content: string; code: boolean };
 export function StreamingMarkdown(props: { content: string; isStreaming?: boolean; className?: string; onFileClick?: (path: string) => void }) {
   const deferredContent = React.useDeferredValue(props.content);
   const rawContent = props.isStreaming ? compactStreamingMarkdown(deferredContent) : props.content;
-  const content = React.useMemo(() => normalizeLooseMarkdownTables(rawContent), [rawContent]);
+  const sanitizedContent = React.useMemo(() => sanitizeIncompleteMarkdown(rawContent), [rawContent]);
+  const content = React.useMemo(() => normalizeLooseMarkdownTables(sanitizedContent), [sanitizedContent]);
   const blocks = React.useMemo(() => splitIntoBlocks(content), [content]);
   return (
     <div className={props.className}>
@@ -25,6 +26,95 @@ export function StreamingMarkdown(props: { content: string; isStreaming?: boolea
 
 const STREAMING_MARKDOWN_PREVIEW_CHARS = 48_000;
 const STREAMING_MARKDOWN_TAIL_CHARS = 20_000;
+
+/**
+ * 清理不完整的 Markdown 标记，防止渲染时出现原始内容
+ * - 闭合未完成的代码块
+ * - 闭合未完成的行内代码
+ * - 处理未完成的多行语法（如表格、列表）
+ */
+function sanitizeIncompleteMarkdown(content: string): string {
+  if (!content) return content;
+  
+  let result = content;
+  
+  // 1. 处理未闭合的代码块（```）
+  const codeBlockMatches = result.match(/```/g);
+  if (codeBlockMatches && codeBlockMatches.length % 2 === 1) {
+    const lastBacktickIndex = result.lastIndexOf("```");
+    const afterLastBacktick = result.slice(lastBacktickIndex + 3);
+    
+    // 检查代码块是否只有语言标识或空内容（可能是截断的）
+    const linesAfter = afterLastBacktick.split("\n").filter(line => line.trim().length > 0);
+    if (linesAfter.length === 0 || (linesAfter.length === 1 && linesAfter[0].length < 50 && !linesAfter[0].includes(" "))) {
+      // 代码块刚开始或只有语言标识，移除这个不完整的开始标记
+      const beforeLastBacktick = result.slice(0, lastBacktickIndex);
+      const prevBacktickIndex = beforeLastBacktick.lastIndexOf("```");
+      
+      if (prevBacktickIndex >= 0) {
+        // 保留前面完整的代码块，移除不完整的开始标记
+        result = beforeLastBacktick;
+      } else {
+        // 没有配对的代码块，移除孤立的标记
+        result = result.replace(/```[\w]*\s*$/, "");
+      }
+    }
+    // 如果代码块已经有内容，保持开放状态等待后续流式内容闭合
+  }
+  
+  // 2. 处理未闭合的行内代码标记（单个反引号）
+  // 使用更简单的方法：统计所有不在代码块中的反引号
+  const nonCodeBlockContent = result.replace(/```[\s\S]*?```/g, "");
+  const inlineCodeMatches = nonCodeBlockContent.match(/`/g);
+  if (inlineCodeMatches && inlineCodeMatches.length % 2 === 1) {
+    // 找到最后一个不在代码块中的反引号并移除
+    let backtickCount = 0;
+    let inCodeBlock = false;
+    let lastUnmatchedBacktickIndex = -1;
+    
+    for (let i = 0; i < result.length; i++) {
+      if (result.slice(i, i + 3) === "```") {
+        inCodeBlock = !inCodeBlock;
+        i += 2;
+        continue;
+      }
+      if (!inCodeBlock && result[i] === "`" && (i === 0 || result[i - 1] !== "`") && (i === result.length - 1 || result[i + 1] !== "`")) {
+        backtickCount++;
+        if (backtickCount % 2 === 1) {
+          lastUnmatchedBacktickIndex = i;
+        }
+      }
+    }
+    
+    if (lastUnmatchedBacktickIndex >= 0) {
+      result = result.slice(0, lastUnmatchedBacktickIndex) + result.slice(lastUnmatchedBacktickIndex + 1);
+    }
+  }
+  
+  // 3. 处理可能截断的 HTML 标签（如果启用了 rehypeRaw）
+  const unclosedTagMatch = result.match(/<[a-z][a-z0-9]*(?:\s[^>]*)?(?![^<]*>)(?!\s*\/>)$/i);
+  if (unclosedTagMatch) {
+    result = result.slice(0, -unclosedTagMatch[0].length);
+  }
+  
+  // 4. 处理未完成的表格行（以 | 结尾但没有闭合）
+  const lines = result.split("\n");
+  if (lines.length > 0) {
+    const lastLine = lines[lines.length - 1];
+    // 如果最后一行看起来像表格行但未完成
+    if (lastLine.startsWith("|") && !lastLine.endsWith("|") && lastLine.length > 3) {
+      // 检查是否在代码块外
+      const nonCodeContent = result.replace(/```[\s\S]*?```/g, "");
+      if (nonCodeContent.includes(lastLine)) {
+        // 移除不完整的表格行
+        lines.pop();
+        result = lines.join("\n");
+      }
+    }
+  }
+  
+  return result;
+}
 
 function compactStreamingMarkdown(content: string) {
   if (content.length <= STREAMING_MARKDOWN_PREVIEW_CHARS) return content;
@@ -227,4 +317,8 @@ function hashBlock(input: string) {
     hash = ((hash << 5) + hash) ^ input.charCodeAt(i);
   }
   return (hash >>> 0).toString(36);
+}
+
+export function sanitizeMarkdownForDisplay(content: string): string {
+  return sanitizeIncompleteMarkdown(content);
 }
