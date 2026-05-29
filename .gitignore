@@ -1,67 +1,51 @@
-```gitignore
-# Dependencies
-node_modules/
+```
+# CI/CD
+.github/
 
-# Build outputs
-dist/
-build/
-*.js.map
-*.ts.map
-*.jsx.map
-*.tsx.map
-
-# Environment variables
+# Environment
 .env
 .env.local
 .env.*
 
-# Logs
-*.log
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.julia/
+zig*/
+julia-*/
 
-# Coverage reports
-coverage/
-.nyc_output/
-*.lcov
+# Build artifacts
+dist/
+build/
+target/
+*.pyc
+*.class
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# Temporary files
-*.tmp
-*.temp
-.DS_Store
-Thumbs.db
-
-# IDE specific
+# Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Python (if present)
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-venv/
-.venv/
-.env
-
-# Compiled JavaScript/TypeScript
-lib/
-out/
-dist/
-build/
-
-# Testing
-.jest/
-.nyc_output/
+# Logs and temp files
+*.log
+*.tmp
 coverage/
+htmlcov/
+.coverage
 
-# OS generated
+# System files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 ```
