@@ -423,28 +423,6 @@ export function registerIpcHandlers(_mainWindow: BrowserWindow, services: IpcSer
 
   ipcMain.handle(IpcChannels.getClientInfo, () => services.clientInfo());
 
-  ipcMain.handle(IpcChannels.listSponsorEntries, () => readSponsorOverview(services.appPaths));
-
-  ipcMain.handle(IpcChannels.submitSponsorEntry, async (_event, input: unknown) => {
-    const parsed = sponsorSubmitInputSchema.parse(input ?? {});
-    const overview = await readSponsorOverview(services.appPaths);
-    const entry: SponsorEntry = {
-      id: crypto.randomUUID(),
-      supporterId: parsed.supporterId,
-      message: parsed.message || "支持 Hermes Forge 继续打磨。",
-      status: "self_reported",
-      createdAt: new Date().toISOString(),
-    };
-    const next = await writeSponsorEntries(services.appPaths, [entry, ...overview.entries]);
-    const sync = await syncHermesForgeFeedback(entry);
-    return {
-      ok: true,
-      entry,
-      message: sync.ok ? "已同步到小夏仪表盘，感谢支持和建议。" : `已保存到本机，远程同步失败：${sync.message}`,
-      overview: next,
-    };
-  });
-
   ipcMain.handle(IpcChannels.openPath, async (_event, targetPath: string) => {
     const pathValidation = validateOpenablePath(targetPath, { skipTypeCheck: true });
     if (!pathValidation.ok) return pathValidation;
